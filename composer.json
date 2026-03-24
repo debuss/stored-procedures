@@ -1,0 +1,41 @@
+{
+  "name": "debuss-a/stored-procedures",
+  "description": "A dedicated implementation to deal with stored procedures (with PDO).",
+  "license": "MIT",
+  "keywords": [
+    "stored",
+    "procedure",
+    "pdo",
+    "database"
+  ],
+  "authors": [
+    {
+      "name": "Alexandre Debusschère",
+      "email": "alexandre.debusschere@hey.com"
+    }
+  ],
+  "require": {
+    "php": "^8.3",
+    "ext-pdo": "*"
+  },
+  "require-dev": {
+    "phpstan/phpstan": "^2.1",
+    "pestphp/pest": "^4.4",
+    "mockery/mockery": "^1.6"
+  },
+  "autoload": {
+    "psr-4": {
+      "StoredProcedures\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Tests\\": "tests/"
+    }
+  },
+  "config": {
+    "allow-plugins": {
+      "pestphp/pest-plugin": true
+    }
+  }
+}

@@ -1,0 +1,49 @@
+services:
+  db:
+    image: mysql:5.7
+    ulimits:
+      nofile: # Fix memory leak issue on some systems when LimitCORE=infinity (containerd)
+        soft: 1048576
+        hard: 1048576
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    environment:
+      - MYSQL_ROOT_PASSWORD=demo
+      - MYSQL_DATABASE=demo
+      - MYSQL_USER=demo
+      - MYSQL_PASSWORD=demo
+    ports:
+      - 3306:3306
+  pgsql:
+    image: postgres:14
+    ulimits:
+      nofile: # Fix memory leak issue on some systems when LimitCORE=infinity (containerd)
+        soft: 1048576
+        hard: 1048576
+    volumes:
+      - ./docker/pgsql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    environment:
+      - POSTGRES_USER=demo
+      - POSTGRES_PASSWORD=demo
+      - POSTGRES_DB=demo
+    ports:
+      - 5432:5432
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    volumes:
+      - ./docker/sqlsrv/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./docker/sqlsrv/entrypoint.sh:/docker-entrypoint-initdb.d/entrypoint.sh:ro
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=Demo@12345
+      - MSSQL_DB=demo
+    entrypoint: /bin/bash /docker-entrypoint-initdb.d/entrypoint.sh
+    ports:
+      - 1433:1433
+volumes:
+  db_data: {}
