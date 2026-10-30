@@ -11,9 +11,15 @@
 - `SqlConnection::execute()` and `SqlConnection::query()` both return the row sets, the output values and the affected rows.
 - Drivers receive the `PDO` instance in their constructor and expose a single `prepare()` method returning a `Call`; `bindParameters()` and `getOutputValues()` are removed from `DriverInterface`.
 - `ParameterMode::toPdoType()` is removed.
+- `Procedure::input()` and `inout()` infer the type from the value instead of defaulting to `DbType::STRING`: an `int` is now bound with `PDO::PARAM_INT`.
+- `queryFirst()`, `querySingle()`, `Procedure::first()` and `single()` are declared as returning `array|object` instead of `array|stdClass`.
 
 ### Added
 
+- Typed rows: pass a class to `query()`, `queryFirst()`, `querySingle()`, their `OrDefault` variants, and to `Procedure::all()`, `first()`, `single()`… to map the rows to objects (constructor parameters or public properties, with backed enum and date conversion). Generic return types for PHPStan and IDEs.
+- `SqlConnection::queryScalar()` and `Procedure::scalar()`.
+- Backed enums and `DateTimeInterface` values can be passed as parameters; their type is inferred.
+- `Procedure::input()` and `inout()` infer the type from the value when none is given.
 - PostgreSQL procedures (`CREATE PROCEDURE`), called with `CALL`.
 - Integration tests against the Docker demo databases.
 

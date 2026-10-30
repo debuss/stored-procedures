@@ -56,7 +56,7 @@ class MySql extends AbstractDriver
             match ($parameter->mode) {
                 ParameterMode::IN => $statement->bindValue(
                     ":{$parameter->name}",
-                    $parameter->value,
+                    $parameter->toPdoValue(),
                     $parameter->type->toPdoType()
                 ),
                 ParameterMode::INOUT => $this->initUserVariable($parameter),
@@ -73,7 +73,7 @@ class MySql extends AbstractDriver
     private function initUserVariable(SqlParameter $parameter): void
     {
         $statement = $this->pdo->prepare("SET @{$parameter->name} = ?");
-        $statement->bindValue(1, $parameter->value, $parameter->type->toPdoType());
+        $statement->bindValue(1, $parameter->toPdoValue(), $parameter->type->toPdoType());
         $statement->execute();
         $statement->closeCursor();
     }

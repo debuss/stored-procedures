@@ -3,6 +3,9 @@
 use StoredProcedures\DbType;
 use StoredProcedures\Exception\NoResultsException;
 use StoredProcedures\SqlConnection;
+use Tests\Fixtures\Country;
+use Tests\Fixtures\Iso;
+use Tests\Fixtures\Moment;
 
 beforeEach(function () {
     $this->pdo = integrationPdo('mysql');
@@ -71,4 +74,35 @@ it('returns the affected rows and OUT parameters from execute()', function () {
 
     expect($result->getAffectedRows())->toBe(1)
         ->and((int) $result->getOutputValue('p_country_id'))->toBeGreaterThan(10);
+});
+
+it('maps rows to a class', function () {
+    $countries = $this->connection->query('sp_fetch_all_countries', [], Country::class)->rows();
+
+    expect($countries)->not->toBeEmpty()
+        ->each->toBeInstanceOf(Country::class)
+        ->and($countries[0]->id)->toBeInt();
+});
+
+it('binds a backed enum parameter and maps the row', function () {
+    $country = $this->connection
+        ->procedure('sp_fetch_country_by_iso')
+        ->input('p_iso', Iso::France)
+        ->single(Country::class);
+
+    expect($country->name)->toBe('France');
+});
+
+it('returns a scalar', function () {
+    expect((int) $this->connection->procedure('sp_count_countries')->scalar())->toBeGreaterThanOrEqual(10)
+        ->and($this->connection->procedure('sp_fetch_country_by_iso')->input('p_iso', 'ZZ')->scalar())->toBeNull();
+});
+
+it('round-trips a date parameter to a date property', function () {
+    $moment = $this->connection
+        ->procedure('sp_echo_datetime')
+        ->input('p_value', new DateTimeImmutable('2026-10-30 12:34:56'))
+        ->single(Moment::class);
+
+    expect($moment->value->format('Y-m-d H:i:s'))->toBe('2026-10-30 12:34:56');
 });

@@ -140,3 +140,11 @@ BEGIN
     SELECT COALESCE((SELECT name FROM countries WHERE iso = UPPER(p_iso)), p_name) INTO p_name;
 END;
 $$;
+
+-- 11. Echo a timestamp (round trip of date parameters and columns)
+CREATE OR REPLACE FUNCTION fn_echo_datetime(p_value TIMESTAMP)
+RETURNS TABLE (value TIMESTAMP)
+LANGUAGE sql IMMUTABLE
+AS $$
+    SELECT p_value;
+$$;

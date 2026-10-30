@@ -393,3 +393,67 @@ describe('querySingleOrDefault()', function () {
     });
 });
 
+
+// ---------------------------------------------------------------
+//  Typed rows
+// ---------------------------------------------------------------
+
+describe('typed rows', function () {
+    it('maps the rows of query() to the class', function () {
+        [$connection, $pdo, $driver, $stmt] = setupMocks();
+
+        $driver->shouldReceive('fetchRowSets')->andReturn([[['id' => '1', 'iso' => 'FR', 'name' => 'France']]]);
+        $stmt->shouldReceive('execute')->once();
+        $stmt->shouldReceive('closeCursor')->once();
+
+        expect($connection->query('sp_test', [], Tests\Fixtures\Country::class)->rows())
+            ->toEqual([new Tests\Fixtures\Country(1, 'FR', 'France')]);
+    });
+
+    it('maps the row of queryFirst(), queryFirstOrDefault(), querySingle() and querySingleOrDefault()', function (string $method) {
+        [$connection, $pdo, $driver, $stmt] = setupMocks();
+
+        $stmt->shouldReceive('execute')->once();
+        $stmt->shouldReceive('fetch')->andReturn(['id' => 1, 'iso' => 'FR', 'name' => 'France'], false);
+        $stmt->shouldReceive('closeCursor')->once();
+
+        expect($connection->$method('sp_test', class: Tests\Fixtures\Country::class))
+            ->toEqual(new Tests\Fixtures\Country(1, 'FR', 'France'));
+    })->with(['queryFirst', 'queryFirstOrDefault', 'querySingle', 'querySingleOrDefault']);
+
+    it('returns the default without mapping it', function () {
+        [$connection, $pdo, $driver, $stmt] = setupMocks();
+
+        $stmt->shouldReceive('execute')->once();
+        $stmt->shouldReceive('fetch')->once()->andReturn(false);
+        $stmt->shouldReceive('closeCursor')->once();
+
+        expect($connection->queryFirstOrDefault('sp_test', class: Tests\Fixtures\Country::class))->toBeNull();
+    });
+});
+
+// ---------------------------------------------------------------
+//  queryScalar()
+// ---------------------------------------------------------------
+
+describe('queryScalar()', function () {
+    it('returns the first column of the first row', function (mixed $value) {
+        [$connection, $pdo, $driver, $stmt] = setupMocks();
+
+        $stmt->shouldReceive('execute')->once();
+        $stmt->shouldReceive('fetch')->once()->with(PDO::FETCH_NUM)->andReturn([$value, 'ignored']);
+        $stmt->shouldReceive('closeCursor')->once();
+
+        expect($connection->queryScalar('sp_count'))->toBe($value);
+    })->with([42, false, null]);
+
+    it('returns null when no rows are found', function () {
+        [$connection, $pdo, $driver, $stmt] = setupMocks();
+
+        $stmt->shouldReceive('execute')->once();
+        $stmt->shouldReceive('fetch')->once()->with(PDO::FETCH_NUM)->andReturn(false);
+        $stmt->shouldReceive('closeCursor')->once();
+
+        expect($connection->queryScalar('sp_count'))->toBeNull();
+    });
+});

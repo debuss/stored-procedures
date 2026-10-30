@@ -9,7 +9,8 @@ Built for teams where direct SQL queries are forbidden and all database access g
 - 🐬 **MySQL**, 🐘 **PostgreSQL** and 🪟 **SQL Server** support out of the box
 - Driver auto-detection from your `PDO` connection
 - Fluent `Procedure` builder with `input()` / `output()` / `inout()` chaining
-- Convenient query methods: `query`, `queryFirst`, `querySingle` + `OrDefault` variants
+- Convenient query methods: `query`, `queryFirst`, `querySingle` + `OrDefault` variants, and `queryScalar`
+- Typed rows: map rows to your own classes (readonly DTOs welcome), with PHPStan/IDE type inference
 - `OUT` and `INOUT` parameter support (driver-specific handling is abstracted away)
 - Immutable `ResultSet` with multi-row-set navigation, iteration, and counting
 - Named parameter validation to prevent SQL injection
@@ -78,6 +79,52 @@ $row = $connection->querySingle('sp_get_user_by_email', ['p_email' => 'a@b.com']
 
 // Exactly one row or default
 $row = $connection->querySingleOrDefault('sp_get_user_by_email', ['p_email' => '?'], $default);
+```
+
+### Typed Rows
+
+Pass a class to map the rows to objects. Columns are matched to the constructor parameters by name, ignoring case and underscores (`country_id` fills `$countryId`):
+
+```php
+final readonly class Country
+{
+    public function __construct(
+        public int $id,
+        public string $iso,
+        public string $name,
+        public ?DateTimeImmutable $updatedAt = null,
+    ) {}
+}
+
+$countries = $connection->query('sp_fetch_all_countries', [], Country::class)->rows(); // list<Country>
+$country   = $connection->querySingle('sp_fetch_country_by_iso', ['p_iso' => 'FR'], Country::class);
+$country   = $connection->queryFirstOrDefault('sp_fetch_country_by_iso', ['p_iso' => 'ZZ'], class: Country::class); // ?Country
+
+// With the fluent builder
+$country = $connection
+    ->procedure('sp_fetch_country_by_iso')
+    ->input('p_iso', 'FR')
+    ->single(Country::class);
+
+foreach ($connection->procedure('sp_fetch_all_countries')->all(Country::class) as $country) {
+    echo $country->name;
+}
+```
+
+Mapping rules:
+
+- Scalar values are coerced to the declared types (`"42"` → `int`), string values are converted to **backed enums** (`from()`) and to **`DateTimeInterface`** implementations (`DateTimeInterface` itself gives a `DateTimeImmutable`).
+- Extra columns are ignored. A missing column keeps the default value of an optional parameter, and throws a `MappingException` for a required one.
+- A class without constructor parameters gets its public, non-readonly properties assigned instead.
+- With multiple row sets, the class applies to all of them; override it per row set with `$result->rowSet(1, Order::class)`.
+
+The return types are generic: PHPStan and your IDE know that `query(..., Country::class)->rows()` is a `list<Country>`.
+
+### Scalar Values
+
+```php
+$total = $connection->queryScalar('sp_count_countries');        // first column of the first row, or null
+$total = $connection->procedure('sp_count_countries')->scalar();
 ```
 
 ### Executing (INSERT / UPDATE / DELETE)
@@ -201,8 +248,14 @@ $result = $connection->query('sp_search', [
     'p_active' => true,        // DbType::BOOLEAN
     'p_score'  => 9.5,         // DbType::FLOAT
     'p_notes'  => null,        // DbType::NULL
+    'p_since'  => new DateTimeImmutable('2024-01-01'), // DbType::DATETIME, bound as '2024-01-01 00:00:00'
+    'p_status' => Status::Active, // Backed enum: bound as its value, typed after it
 ]);
 ```
+
+The fluent builder infers the type the same way when none is given: `->input('p_age', 30)` is bound as an integer.
+
+Dates are bound as `'Y-m-d H:i:s'` in their own timezone (`'Y-m-d'` with `DbType::DATE`), without fractional seconds.
 
 For explicit control, use `SqlParameter` directly:
 
@@ -234,6 +287,7 @@ All exceptions extend `StoredProcedureException` for easy catch-all handling:
 | `StoredProcedureException` | Base class — invalid procedure/parameter names, numeric array keys, etc. |
 | `NoResultsException` | `queryFirst()` or `querySingle()` returns zero rows |
 | `MultipleResultsException` | `querySingle()` returns more than one row |
+| `MappingException` | A row cannot be mapped to the requested class |
 | `UnsupportedDriverException` | PDO driver is not `mysql`, `pgsql`, `sqlsrv`, or `dblib` |
 
 ```php

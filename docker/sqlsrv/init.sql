@@ -135,3 +135,15 @@ BEGIN
 END;
 GO
 
+
+-- 9. Echo a datetime (round trip of date parameters and columns)
+IF OBJECT_ID('sp_echo_datetime', 'P') IS NOT NULL DROP PROCEDURE sp_echo_datetime;
+GO
+CREATE PROCEDURE sp_echo_datetime
+    @p_value DATETIME2(0)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT @p_value AS value;
+END;
+GO

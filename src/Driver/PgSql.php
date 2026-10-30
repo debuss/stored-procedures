@@ -73,7 +73,7 @@ class PgSql extends AbstractDriver
         foreach ($this->inputParameters($parameters) as $parameter) {
             $statement->bindValue(
                 ":{$parameter->name}",
-                $parameter->value,
+                $parameter->toPdoValue(),
                 $parameter->type->toPdoType()
             );
         }

@@ -65,12 +65,14 @@ class SqlConnection
      * Execute a stored procedure with the provided parameters and return the result set,
      * with its row sets, output values and affected rows.
      *
+     * @template T of object
      * @param string $stored_procedure
      * @param array<string, mixed>|SqlParameter[] $parameters
-     * @return ResultSet
+     * @param class-string<T>|null $class The class to map the rows to (see {@see Hydrator}), or null to keep them as fetched
+     * @return ($class is null ? ResultSet<array<string, mixed>|stdClass> : ResultSet<T>)
      * @throws StoredProcedureException
      */
-    public function query(string $stored_procedure, array $parameters = []): ResultSet
+    public function query(string $stored_procedure, array $parameters = [], ?string $class = null): ResultSet
     {
         // The affected rows must be read before the row sets are fetched
         [[$affected_rows, $row_sets], $call] = $this->run(
@@ -79,20 +81,22 @@ class SqlConnection
             fn(PDOStatement $statement): array => [$statement->rowCount(), $this->driver->fetchRowSets($statement)]
         );
 
-        return new ResultSet($row_sets, $call->getOutputValues($row_sets), $affected_rows);
+        return new ResultSet($row_sets, $call->getOutputValues($row_sets), $affected_rows, $class);
     }
 
     /**
      * Get the first row of a result set.
      * If no rows are found, a NoResultsException is thrown.
      *
+     * @template T of object
      * @param string $stored_procedure
      * @param array<string, mixed>|SqlParameter[] $parameters
-     * @return array|stdClass
+     * @param class-string<T>|null $class The class to map the row to (see {@see Hydrator}), or null to keep it as fetched
+     * @return ($class is null ? array<string, mixed>|stdClass : T)
      * @throws NoResultsException When no rows are found
      * @throws StoredProcedureException
      */
-    public function queryFirst(string $stored_procedure, array $parameters = []): array|stdClass
+    public function queryFirst(string $stored_procedure, array $parameters = [], ?string $class = null): array|object
     {
         [$row] = $this->run($stored_procedure, $parameters, fn(PDOStatement $statement): mixed => $statement->fetch());
 
@@ -100,22 +104,24 @@ class SqlConnection
             throw new NoResultsException("No results found for '$stored_procedure'.");
         }
 
-        return $row;
+        return $class === null ? $row : Hydrator::hydrate($row, $class);
     }
 
     /**
      * Get the first row of a result set, or the default value if none is found.
      *
+     * @template T of object
      * @param string $stored_procedure
      * @param array<string, mixed>|SqlParameter[] $parameters
-     * @param array|stdClass|null $default
-     * @return array|stdClass|null
+     * @param array<string, mixed>|object|null $default
+     * @param class-string<T>|null $class The class to map the row to (see {@see Hydrator}), or null to keep it as fetched
+     * @return ($class is null ? array<string, mixed>|stdClass|null : T|null)
      * @throws StoredProcedureException
      */
-    public function queryFirstOrDefault(string $stored_procedure, array $parameters = [], null|array|stdClass $default = null): null|array|stdClass
+    public function queryFirstOrDefault(string $stored_procedure, array $parameters = [], null|array|object $default = null, ?string $class = null): null|array|object
     {
         try {
-            return $this->queryFirst($stored_procedure, $parameters);
+            return $this->queryFirst($stored_procedure, $parameters, $class);
         } catch (NoResultsException) {
             return $default;
         }
@@ -125,14 +131,16 @@ class SqlConnection
      * Get the only row of a result set.
      * If no rows, or more than one row is found, an exception is thrown.
      *
+     * @template T of object
      * @param string $stored_procedure
      * @param array<string, mixed>|SqlParameter[] $parameters
-     * @return array|stdClass
+     * @param class-string<T>|null $class The class to map the row to (see {@see Hydrator}), or null to keep it as fetched
+     * @return ($class is null ? array<string, mixed>|stdClass : T)
      * @throws NoResultsException When no rows are found
      * @throws MultipleResultsException When more than one row is found
      * @throws StoredProcedureException
      */
-    public function querySingle(string $stored_procedure, array $parameters = []): array|stdClass
+    public function querySingle(string $stored_procedure, array $parameters = [], ?string $class = null): array|object
     {
         // pdo_sqlsrv throws when fetching past the end of the result set
         [[$first, $second]] = $this->run(
@@ -149,25 +157,43 @@ class SqlConnection
             throw new MultipleResultsException("Expected a single result for '$stored_procedure', but multiple rows were returned.");
         }
 
-        return $first;
+        return $class === null ? $first : Hydrator::hydrate($first, $class);
     }
 
     /**
      * Get the only row of a result set, or the default value if none or more than 1 is found.
      *
+     * @template T of object
      * @param string $stored_procedure
      * @param array<string, mixed>|SqlParameter[] $parameters
-     * @param array|stdClass $default
+     * @param mixed $default
+     * @param class-string<T>|null $class The class to map the row to (see {@see Hydrator}), or null to keep it as fetched
      * @return mixed
      * @throws StoredProcedureException
      */
-    public function querySingleOrDefault(string $stored_procedure, array $parameters = [], mixed $default = null): mixed
+    public function querySingleOrDefault(string $stored_procedure, array $parameters = [], mixed $default = null, ?string $class = null): mixed
     {
         try {
-            return $this->querySingle($stored_procedure, $parameters);
+            return $this->querySingle($stored_procedure, $parameters, $class);
         } catch (NoResultsException|MultipleResultsException) {
             return $default;
         }
+    }
+
+    /**
+     * Get the first column of the first row, or null if no rows are found.
+     *
+     * @param string $stored_procedure
+     * @param array<string, mixed>|SqlParameter[] $parameters
+     * @return mixed
+     * @throws StoredProcedureException
+     */
+    public function queryScalar(string $stored_procedure, array $parameters = []): mixed
+    {
+        // fetchColumn() cannot tell a false value from no rows
+        [$row] = $this->run($stored_procedure, $parameters, fn(PDOStatement $statement): mixed => $statement->fetch(PDO::FETCH_NUM));
+
+        return $row === false ? null : $row[0];
     }
 
     /**

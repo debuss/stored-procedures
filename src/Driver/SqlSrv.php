@@ -65,11 +65,11 @@ class SqlSrv extends AbstractDriver
             $pdoType = $parameter->type->toPdoType();
 
             if ($parameter->mode === ParameterMode::IN) {
-                $statement->bindValue($placeholder, $parameter->value, $pdoType);
+                $statement->bindValue($placeholder, $parameter->toPdoValue(), $pdoType);
                 continue;
             }
 
-            $outputs[$parameter->name] = $parameter->value;
+            $outputs[$parameter->name] = $parameter->toPdoValue();
             $statement->bindParam(
                 $placeholder,
                 $outputs[$parameter->name],

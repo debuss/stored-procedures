@@ -2,6 +2,11 @@
 
 namespace StoredProcedures;
 
+use BackedEnum;
+use DateTimeInterface;
+use StoredProcedures\Exception\StoredProcedureException;
+use UnitEnum;
+
 readonly class SqlParameter
 {
 
@@ -13,19 +18,31 @@ readonly class SqlParameter
         public int $size = 4000
     ) {}
 
+    /**
+     * Create an IN parameter, inferring its type from the value.
+     */
     public static function from(string $name, mixed $value): SqlParameter
     {
-        if ($value === null) {
-            return new self($name, null, DbType::NULL);
-        }
+        return new self($name, $value, DbType::fromValue($value));
+    }
 
-        $type = match (gettype($value)) {
-            'boolean' => DbType::BOOLEAN,
-            'integer' => DbType::INTEGER,
-            'double'  => DbType::FLOAT,
-            default   => DbType::STRING,
+    /**
+     * Get the value to bind to the statement.
+     *
+     * Backed enums are bound as their value, dates as a 'Y-m-d H:i:s' string
+     * ('Y-m-d' for DbType::DATE) in their own timezone.
+     *
+     * @throws StoredProcedureException When the value is an enum without backing value
+     */
+    public function toPdoValue(): mixed
+    {
+        return match (true) {
+            $this->value instanceof BackedEnum => $this->value->value,
+            $this->value instanceof UnitEnum => throw new StoredProcedureException(
+                "Parameter '{$this->name}': the enum " . $this->value::class . " must be backed to be bound."
+            ),
+            $this->value instanceof DateTimeInterface => $this->value->format($this->type === DbType::DATE ? 'Y-m-d' : 'Y-m-d H:i:s'),
+            default => $this->value,
         };
-
-        return new self($name, $value, $type);
     }
 }
