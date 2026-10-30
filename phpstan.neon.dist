@@ -1,0 +1,6 @@
+parameters:
+    # Level 9 and above require proving the type of the rows fetched by PDO (mixed),
+    # which depends on the fetch mode chosen by the user.
+    level: 8
+    paths:
+        - src

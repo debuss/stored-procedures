@@ -18,6 +18,11 @@
     "php": "^8.3",
     "ext-pdo": "*"
   },
+  "suggest": {
+    "ext-pdo_mysql": "To call MySQL stored procedures",
+    "ext-pdo_pgsql": "To call PostgreSQL functions and procedures",
+    "ext-pdo_sqlsrv": "To call SQL Server stored procedures"
+  },
   "require-dev": {
     "phpstan/phpstan": "^2.1",
     "pestphp/pest": "^4.4",
@@ -37,5 +42,15 @@
     "allow-plugins": {
       "pestphp/pest-plugin": true
     }
+  },
+  "scripts": {
+    "test": "pest --parallel",
+    "test:mutate": [
+      "@putenv XDEBUG_MODE=coverage",
+      "pest --mutate --min=80 --parallel"
+    ],
+    "analyse": "phpstan analyse --no-progress",
+    "db:up": "docker compose -f docker/docker-compose.yml up -d",
+    "db:down": "docker compose -f docker/docker-compose.yml down"
   }
 }

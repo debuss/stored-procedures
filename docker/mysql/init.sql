@@ -108,3 +108,12 @@ BEGIN
 END //
 DELIMITER ;
 
+
+-- 9. Echo a datetime (round trip of date parameters and columns)
+DROP PROCEDURE IF EXISTS sp_echo_datetime;
+DELIMITER //
+CREATE PROCEDURE sp_echo_datetime(IN p_value DATETIME)
+BEGIN
+    SELECT p_value AS value;
+END //
+DELIMITER ;

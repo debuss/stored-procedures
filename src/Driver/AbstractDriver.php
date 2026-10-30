@@ -2,12 +2,28 @@
 
 namespace StoredProcedures\Driver;
 
+use PDO;
 use PDOStatement;
 use StoredProcedures\Exception\StoredProcedureException;
+use StoredProcedures\ParameterMode;
 use StoredProcedures\SqlParameter;
 
-abstract class AbstractDriver
+abstract class AbstractDriver implements DriverInterface
 {
+
+    public function __construct(
+        protected readonly PDO $pdo
+    ) {}
+
+    /**
+     * Build the SQL calling the stored procedure.
+     *
+     * @param string $stored_procedure
+     * @param SqlParameter[] $parameters
+     * @return string
+     * @throws StoredProcedureException
+     */
+    abstract public function getQuerySyntax(string $stored_procedure, array $parameters = []): string;
 
     /**
      * Validate that a stored procedure name contains only safe characters.
@@ -16,7 +32,7 @@ abstract class AbstractDriver
      */
     protected function assertValidProcedureName(string $name): void
     {
-        if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_.]*$/', $name)) {
+        if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*$/', $name)) {
             throw new StoredProcedureException("Invalid stored procedure name: '$name'");
         }
     }
@@ -25,7 +41,7 @@ abstract class AbstractDriver
      * Validate that all parameter names contain only safe characters.
      *
      * Parameter names are interpolated into SQL (e.g. MySQL user variables @name,
-     * SQL Server EXEC @name), so they must be validated to prevent injection.
+     * PostgreSQL named notation name => value), so they must be validated to prevent injection.
      *
      * @param SqlParameter[] $parameters
      * @throws StoredProcedureException
@@ -40,13 +56,25 @@ abstract class AbstractDriver
     }
 
     /**
+     * @param SqlParameter[] $parameters
+     * @return SqlParameter[] The OUT and INOUT parameters
+     */
+    protected function outputParameters(array $parameters): array
+    {
+        return array_filter(
+            $parameters,
+            fn(SqlParameter $param): bool => $param->mode !== ParameterMode::IN
+        );
+    }
+
+    /**
      * Default implementation: iterate through multiple row sets via nextRowset().
      *
      * Works for drivers that support multiple row sets (MySQL, SQL Server).
      * Override in drivers that do not (PostgreSQL).
      *
      * @param PDOStatement $statement An already-executed statement
-     * @return array<int, array>
+     * @return list<array<mixed>>
      */
     public function fetchRowSets(PDOStatement $statement): array
     {

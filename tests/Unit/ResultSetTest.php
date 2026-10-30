@@ -118,10 +118,17 @@ describe('output values', function () {
         expect($rs->getOutputValue('p_id'))->toBe(42);
     });
 
-    it('returns null for missing output value', function () {
+    it('returns a null output value', function () {
+        $rs = new ResultSet([], ['p_id' => null]);
+
+        expect($rs->getOutputValue('p_id'))->toBeNull();
+    });
+
+    it('throws OutOfRangeException for an unknown output parameter', function () {
         $rs = new ResultSet([], ['p_id' => 42]);
 
-        expect($rs->getOutputValue('p_missing'))->toBeNull();
+        expect(fn() => $rs->getOutputValue('p_missing'))
+            ->toThrow(OutOfRangeException::class, "No output parameter named 'p_missing'.");
     });
 });
 
@@ -133,3 +140,44 @@ describe('affected rows', function () {
     });
 });
 
+
+describe('typed rows', function () {
+    beforeEach(function () {
+        $this->countries = [['id' => 1, 'iso' => 'FR', 'name' => 'France'], ['id' => 2, 'iso' => 'DE', 'name' => 'Germany']];
+        $this->orders = [['id' => 10, 'name' => 'Order']];
+    });
+
+    it('maps the rows to the class given to the constructor', function () {
+        $rs = new ResultSet([$this->countries], [], 0, Tests\Fixtures\Country::class);
+
+        expect($rs->rows())->toEqual([new Tests\Fixtures\Country(1, 'FR', 'France'), new Tests\Fixtures\Country(2, 'DE', 'Germany')]);
+    });
+
+    it('maps the rows when iterating', function () {
+        $rs = new ResultSet([$this->countries], [], 0, Tests\Fixtures\Country::class);
+
+        expect(iterator_to_array($rs))->each->toBeInstanceOf(Tests\Fixtures\Country::class);
+    });
+
+    it('overrides the class per access', function () {
+        $rs = new ResultSet([$this->countries, $this->orders]);
+
+        expect($rs->rows(Tests\Fixtures\Country::class)[0])->toBeInstanceOf(Tests\Fixtures\Country::class)
+            ->and($rs->rowSet(1, Tests\Fixtures\MutableCountry::class)[0]->id)->toBe(10)
+            ->and($rs->getAllRowSets(Tests\Fixtures\MutableCountry::class)[1][0]->name)->toBe('Order');
+    });
+
+    it('keeps the rows as fetched without class', function () {
+        $rs = new ResultSet([$this->countries]);
+
+        expect($rs->rows())->toBe($this->countries)
+            ->and($rs->getAllRowSets())->toBe([$this->countries]);
+    });
+
+    it('counts the rows without mapping them', function () {
+        $rs = new ResultSet([[['not' => 'a country']]], [], 0, Tests\Fixtures\Country::class);
+
+        expect($rs)->toHaveCount(1)
+            ->and($rs->isEmpty())->toBeFalse();
+    });
+});

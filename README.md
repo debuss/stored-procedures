@@ -9,7 +9,8 @@ Built for teams where direct SQL queries are forbidden and all database access g
 - 🐬 **MySQL**, 🐘 **PostgreSQL** and 🪟 **SQL Server** support out of the box
 - Driver auto-detection from your `PDO` connection
 - Fluent `Procedure` builder with `input()` / `output()` / `inout()` chaining
-- Convenient query methods: `query`, `queryFirst`, `querySingle` + `OrDefault` variants
+- Convenient query methods: `query`, `queryFirst`, `querySingle` + `OrDefault` variants, and `queryScalar`
+- Typed rows: map rows to your own classes (readonly DTOs welcome), with PHPStan/IDE type inference
 - `OUT` and `INOUT` parameter support (driver-specific handling is abstracted away)
 - Immutable `ResultSet` with multi-row-set navigation, iteration, and counting
 - Named parameter validation to prevent SQL injection
@@ -22,6 +23,7 @@ Built for teams where direct SQL queries are forbidden and all database access g
 - PHP **8.3+**
 - `ext-pdo`
 - One of: `ext-pdo_mysql`, `ext-pdo_pgsql`, `ext-pdo_sqlsrv` (or `ext-pdo_dblib`)
+- A `PDO` instance in the `PDO::ERRMODE_EXCEPTION` error mode (the default since PHP 8)
 
 > [!NOTE]
 > For PostgreSQL, version 14+ is required.
@@ -80,6 +82,52 @@ $row = $connection->querySingle('sp_get_user_by_email', ['p_email' => 'a@b.com']
 $row = $connection->querySingleOrDefault('sp_get_user_by_email', ['p_email' => '?'], $default);
 ```
 
+### Typed Rows
+
+Pass a class to map the rows to objects. Columns are matched to the constructor parameters by name, ignoring case and underscores (`country_id` fills `$countryId`):
+
+```php
+final readonly class Country
+{
+    public function __construct(
+        public int $id,
+        public string $iso,
+        public string $name,
+        public ?DateTimeImmutable $updatedAt = null,
+    ) {}
+}
+
+$countries = $connection->query('sp_fetch_all_countries', [], Country::class)->rows(); // list<Country>
+$country   = $connection->querySingle('sp_fetch_country_by_iso', ['p_iso' => 'FR'], Country::class);
+$country   = $connection->queryFirstOrDefault('sp_fetch_country_by_iso', ['p_iso' => 'ZZ'], class: Country::class); // ?Country
+
+// With the fluent builder
+$country = $connection
+    ->procedure('sp_fetch_country_by_iso')
+    ->input('p_iso', 'FR')
+    ->single(Country::class);
+
+foreach ($connection->procedure('sp_fetch_all_countries')->all(Country::class) as $country) {
+    echo $country->name;
+}
+```
+
+Mapping rules:
+
+- Scalar values are coerced to the declared types (`"42"` → `int`), string values are converted to **backed enums** (`from()`) and to **`DateTimeInterface`** implementations (`DateTimeInterface` itself gives a `DateTimeImmutable`).
+- Extra columns are ignored. A missing column keeps the default value of an optional parameter, and throws a `MappingException` for a required one.
+- A class without constructor parameters gets its public, non-readonly properties assigned instead.
+- With multiple row sets, the class applies to all of them; override it per row set with `$result->rowSet(1, Order::class)`.
+
+The return types are generic: PHPStan and your IDE know that `query(..., Country::class)->rows()` is a `list<Country>`.
+
+### Scalar Values
+
+```php
+$total = $connection->queryScalar('sp_count_countries');        // first column of the first row, or null
+$total = $connection->procedure('sp_count_countries')->scalar();
+```
+
 ### Executing (INSERT / UPDATE / DELETE)
 
 ```php
@@ -93,9 +141,7 @@ echo $result->getAffectedRows(); // e.g. 1
 
 ### Output Parameters
 
-#### MySQL / SQL Server
-
-OUT and INOUT parameters are retrieved automatically via the `ResultSet`:
+OUT and INOUT parameters are retrieved via the `ResultSet`, whatever the database:
 
 ```php
 use StoredProcedures\{SqlParameter, DbType, ParameterMode};
@@ -108,17 +154,33 @@ $result = $connection->execute('sp_insert_and_return_id', [
 $newId = $result->getOutputValue('p_id');
 ```
 
+`getOutputValue()` throws an `OutOfRangeException` when no OUT or INOUT parameter has the given name.
+
 #### PostgreSQL
 
-PostgreSQL functions return OUT parameters as **columns in the result set** — no special handling needed:
+Both functions and procedures are supported: the package looks up the routine in `pg_proc` and generates `SELECT * FROM fn(...)` for a function or `CALL sp(...)` for a procedure (the lookup is cached per name).
+
+PostgreSQL returns OUT and INOUT values as **columns of the result row**: they are available both as output values and in the rows.
 
 ```php
-$result = $connection->query('fn_insert_user_returning_id', [
-    'p_name' => 'Alice',
-]);
+$row = $connection
+    ->procedure('fn_insert_user_returning_id')
+    ->input('p_name', 'Alice')
+    ->output('p_id', DbType::INTEGER)
+    ->single();
 
-$newId = $result->rows()[0]->p_id; // OUT column
+$newId = $row->p_id; // OUT column
 ```
+
+### Parameter Order
+
+| Driver | Parameters are matched… |
+|--------|-------------------------|
+| **PostgreSQL** | **by name** (named notation `fn(p_name => :p_name)`): the order does not matter, but the names must match the routine's argument names |
+| **MySQL** / **SQL Server** | **by position**: pass them in the order they are declared in the procedure |
+
+> [!WARNING]
+> With MySQL and SQL Server, parameter names are only used as placeholders. Passing parameters in the wrong order silently swaps their values.
 
 ### Fluent Procedure Builder
 
@@ -137,7 +199,7 @@ $result = $connection
     ->procedure('sp_insert_user')
     ->input('p_name', 'Alice')
     ->output('p_id', DbType::INTEGER)
-    ->all();
+    ->execute();
 
 echo $result->getOutputValue('p_id');
 
@@ -150,11 +212,12 @@ $result = $connection
 
 echo $result->getOutputValue('p_name'); // "France"
 
-// Shorthand for affected-rows-only calls
+// Affected rows
 $affected = $connection
     ->procedure('sp_delete_user')
     ->input('p_id', 42)
-    ->execute(); // Returns int
+    ->execute()
+    ->getAffectedRows();
 ```
 
 ### Multi-Result-Set Procedures
@@ -186,8 +249,14 @@ $result = $connection->query('sp_search', [
     'p_active' => true,        // DbType::BOOLEAN
     'p_score'  => 9.5,         // DbType::FLOAT
     'p_notes'  => null,        // DbType::NULL
+    'p_since'  => new DateTimeImmutable('2024-01-01'), // DbType::DATETIME, bound as '2024-01-01 00:00:00'
+    'p_status' => Status::Active, // Backed enum: bound as its value, typed after it
 ]);
 ```
+
+The fluent builder infers the type the same way when none is given: `->input('p_age', 30)` is bound as an integer.
+
+Dates are bound as `'Y-m-d H:i:s'` in their own timezone (`'Y-m-d'` with `DbType::DATE`), without fractional seconds.
 
 For explicit control, use `SqlParameter` directly:
 
@@ -205,7 +274,7 @@ $result = $connection->query('sp_search', [
 | Driver | PDO name | Syntax generated         | OUT/INOUT mechanism |
 |--------|----------|--------------------------|---------------------|
 | **MySQL** | `mysql` | `CALL \`sp\`(:in, @out)` | `@user_variables` + `SELECT @var` |
-| **PostgreSQL** | `pgsql` | `SELECT * FROM fn(:in)`  | OUT returned as result columns |
+| **PostgreSQL** | `pgsql` | `SELECT * FROM fn(p_in => :p_in)` / `CALL sp(p_in => :p_in, p_out => NULL)` | OUT/INOUT read from the result columns |
 | **SQL Server** | `sqlsrv` / `dblib` | `{CALL [sp](:in, :out)}` | `PDO::PARAM_INPUT_OUTPUT` binding |
 
 The correct driver is resolved automatically from `PDO::ATTR_DRIVER_NAME`.
@@ -219,6 +288,7 @@ All exceptions extend `StoredProcedureException` for easy catch-all handling:
 | `StoredProcedureException` | Base class — invalid procedure/parameter names, numeric array keys, etc. |
 | `NoResultsException` | `queryFirst()` or `querySingle()` returns zero rows |
 | `MultipleResultsException` | `querySingle()` returns more than one row |
+| `MappingException` | A row cannot be mapped to the requested class |
 | `UnsupportedDriverException` | PDO driver is not `mysql`, `pgsql`, `sqlsrv`, or `dblib` |
 
 ```php
@@ -236,19 +306,21 @@ try {
 ## Testing
 
 ```bash
-# Run the test suite
-./vendor/bin/pest --parallel
-
-# Run with mutation testing
-XDEBUG_MODE=coverage ./vendor/bin/pest --mutate --min=80 --parallel
+composer db:up          # Start the demo databases (see below)
+composer test           # Run the test suite
+composer test:mutate    # Run the mutation tests (requires Xdebug)
+composer analyse        # Run PHPStan
+composer db:down        # Stop the demo databases
 ```
+
+The integration tests in `tests/Integration` run against the demo databases below and are skipped when a database is unreachable. Set the `DB_REQUIRED` environment variable to make them fail instead (as in CI). The DSNs can be overridden with the `MYSQL_DSN`, `PGSQL_DSN` and `SQLSRV_DSN` environment variables.
 
 ## Docker (demo databases)
 
 The repository includes a `docker-compose.yml` with MySQL, PostgreSQL, and SQL Server containers — each pre-loaded with a `countries` table, seed data, and example stored procedures/functions.
 
 ```bash
-docker compose up -d
+docker compose -f docker/docker-compose.yml up -d    # or: composer db:up
 
 # Run the demo scripts
 php docker/mysql/mysql.php

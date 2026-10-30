@@ -10,40 +10,125 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  analyse:
     runs-on: ubuntu-latest
 
-    strategy:
-      fail-fast: true
-      matrix:
-        php: [ '8.3', '8.4', '8.5' ]
-
-    name: PHP ${{ matrix.php }}
+    name: PHPStan
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v7
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+
+      - name: Validate composer.json
+        run: composer validate --strict
+
+      - name: Install dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+
+      - name: Run PHPStan analysis
+        run: composer analyse
+
+  tests:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php: [ '8.3', '8.4', '8.5' ]
+
+    name: Tests (PHP ${{ matrix.php }})
+
+    # Same databases as docker/docker-compose.yml; the schemas are loaded once the code is checked out
+    services:
+      mysql:
+        image: mysql:5.7
+        env:
+          MYSQL_ROOT_PASSWORD: demo
+          MYSQL_DATABASE: demo
+          MYSQL_USER: demo
+          MYSQL_PASSWORD: demo
+        ports:
+          - 3306:3306
+        # TCP only: the temporary server started during initialization does not listen on it
+        options: >-
+          --health-cmd "mysqladmin ping --protocol=tcp -h 127.0.0.1 -uroot -pdemo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+
+      pgsql:
+        image: postgres:14
+        env:
+          POSTGRES_USER: demo
+          POSTGRES_PASSWORD: demo
+          POSTGRES_DB: demo
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U demo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: Y
+          MSSQL_SA_PASSWORD: Demo@12345
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P Demo@12345 -C -Q 'SELECT 1'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 30
+          --health-start-period 20s
+
+    env:
+      # Fail, instead of skipping, the integration tests when a database or extension is missing
+      DB_REQUIRED: 1
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Load the demo schemas
+        run: |
+          docker exec -i ${{ job.services.mysql.id }} mysql -uroot -pdemo demo < docker/mysql/init.sql
+          docker exec -i ${{ job.services.pgsql.id }} psql -U demo -d demo -v ON_ERROR_STOP=1 -q < docker/pgsql/init.sql
+          docker cp docker/sqlsrv/init.sql ${{ job.services.mssql.id }}:/tmp/init.sql
+          docker exec ${{ job.services.mssql.id }} /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P Demo@12345 -C -b -Q "CREATE DATABASE demo"
+          docker exec ${{ job.services.mssql.id }} /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P Demo@12345 -C -b -d demo -i /tmp/init.sql
+
+      # pdo_sqlsrv needs the Microsoft ODBC Driver, which setup-php does not install
+      - name: Install the Microsoft ODBC Driver for SQL Server
+        run: |
+          sudo apt-get update -q
+          if ! apt-cache show msodbcsql18 > /dev/null 2>&1; then
+            curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+            curl -fsSL "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/prod.list" | sudo tee /etc/apt/sources.list.d/mssql-release.list
+            sudo apt-get update -q
+          fi
+          sudo ACCEPT_EULA=Y apt-get install -y -q msodbcsql18
 
       - name: Set up PHP ${{ matrix.php }}
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
+          extensions: pdo_mysql, pdo_pgsql, pdo_sqlsrv
           coverage: xdebug
-
-      - name: Validate composer.json and composer.lock
-        run: composer validate --strict
-
-      - name: Allow Composer plugin pestphp/pest-plugin
-        run: composer config --no-plugins allow-plugins.pestphp/pest-plugin true
 
       - name: Install dependencies
         run: composer install --prefer-dist --no-interaction --no-progress
 
       - name: Run test suite
-        run:  ./vendor/bin/pest tests --parallel
+        run: composer test
 
       - name: Run mutation tests
-        run: XDEBUG_MODE=coverage ./vendor/bin/pest tests --mutate --min=80 --parallel
-
-      - name: Run PHPStan analysis
-        run: ./vendor/bin/phpstan analyse src -l 5
+        run: composer test:mutate

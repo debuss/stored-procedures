@@ -9,7 +9,8 @@ use StoredProcedures\SqlParameter;
 covers(SqlSrv::class);
 
 beforeEach(function () {
-    $this->driver = new SqlSrv();
+    $this->pdo = Mockery::mock(PDO::class);
+    $this->driver = new SqlSrv($this->pdo);
 });
 
 describe('getQuerySyntax()', function () {
@@ -60,107 +61,71 @@ describe('getQuerySyntax()', function () {
     });
 });
 
-describe('bindParameters()', function () {
-    it('calls bindValue for IN parameters', function () {
+describe('prepare()', function () {
+    it('prepares the {CALL} and binds IN parameters with bindValue', function () {
         $stmt = Mockery::mock(PDOStatement::class);
-        $pdo = Mockery::mock(PDO::class);
 
-        $stmt->shouldReceive('bindValue')
-            ->once()
-            ->with(':p_name', 'France', PDO::PARAM_STR);
+        $this->pdo->shouldReceive('prepare')->once()->with('{CALL [sp_find](:p_name)}')->andReturn($stmt);
+        $stmt->shouldReceive('bindValue')->once()->with(':p_name', 'France', PDO::PARAM_STR);
 
-        $params = [new SqlParameter('p_name', 'France', DbType::STRING)];
+        $call = $this->driver->prepare('sp_find', [new SqlParameter('p_name', 'France', DbType::STRING)]);
 
-        $this->driver->bindParameters($stmt, $params, $pdo);
+        expect($call->statement)->toBe($stmt);
     });
 
-    it('calls bindParam with PARAM_INPUT_OUTPUT for OUT parameters', function () {
+    it('binds OUT and INOUT parameters with bindParam and PARAM_INPUT_OUTPUT', function (ParameterMode $mode) {
         $stmt = Mockery::mock(PDOStatement::class);
-        $pdo = Mockery::mock(PDO::class);
 
+        $this->pdo->shouldReceive('prepare')->andReturn($stmt);
         $stmt->shouldReceive('bindParam')
             ->once()
-            ->withArgs(function ($placeholder, &$ref, $type, $size) {
-                return $placeholder === ':p_id'
-                    && $type === (PDO::PARAM_INT | PDO::PARAM_INPUT_OUTPUT)
-                    && $size === 4000;
-            });
+            ->with(':p_name', Mockery::any(), PDO::PARAM_STR | PDO::PARAM_INPUT_OUTPUT, 100);
 
-        $params = [new SqlParameter('p_id', null, DbType::INTEGER, ParameterMode::OUT)];
-
-        $this->driver->bindParameters($stmt, $params, $pdo);
-    });
-
-    it('calls bindParam with PARAM_INPUT_OUTPUT for INOUT parameters', function () {
-        $stmt = Mockery::mock(PDOStatement::class);
-        $pdo = Mockery::mock(PDO::class);
-
-        $stmt->shouldReceive('bindParam')
-            ->once()
-            ->withArgs(function ($placeholder, &$ref, $type, $size) {
-                return $placeholder === ':p_name'
-                    && $ref === 'hello'
-                    && $type === (PDO::PARAM_STR | PDO::PARAM_INPUT_OUTPUT)
-                    && $size === 100;
-            });
-
-        $params = [new SqlParameter('p_name', 'hello', DbType::STRING, ParameterMode::INOUT, 100)];
-
-        $this->driver->bindParameters($stmt, $params, $pdo);
-    });
+        $this->driver->prepare('sp_search', [new SqlParameter('p_name', 'x', DbType::STRING, $mode, 100)]);
+    })->with([ParameterMode::OUT, ParameterMode::INOUT]);
 });
 
-describe('getOutputValues()', function () {
-    it('returns empty array when no output parameters', function () {
-        $pdo = Mockery::mock(PDO::class);
-        $params = [new SqlParameter('p_name', 'France', DbType::STRING)];
+describe('output values', function () {
+    it('returns empty array when there are no output parameters', function () {
+        $stmt = Mockery::mock(PDOStatement::class)->shouldIgnoreMissing();
+        $this->pdo->shouldReceive('prepare')->andReturn($stmt);
 
-        expect($this->driver->getOutputValues($params, $pdo))->toBe([]);
+        $call = $this->driver->prepare('sp_find', [new SqlParameter('p_name', 'France', DbType::STRING)]);
+
+        expect($call->getOutputValues([]))->toBe([]);
     });
 
-    it('returns bound reference values for OUT parameters', function () {
-        $stmt = Mockery::mock(PDOStatement::class);
-        $pdo = Mockery::mock(PDO::class);
+    it('returns the values PDO wrote into the bound references', function () {
+        $stmt = Mockery::mock(PDOStatement::class)->shouldIgnoreMissing();
+        $bound = [];
 
-        // bindParam stores a reference; simulate PDO writing to it
-        $stmt->shouldReceive('bindParam')
-            ->once()
-            ->withArgs(function ($placeholder, &$ref, $type, $size) {
-                // Simulate PDO writing an output value into the reference
-                $ref = 42;
-                return true;
-            });
+        $this->pdo->shouldReceive('prepare')->andReturn($stmt);
+        $stmt->shouldReceive('bindParam')->andReturnUsing(function (string $placeholder, &$variable) use (&$bound) {
+            $bound[$placeholder] = &$variable;
+            return true;
+        });
 
-        $params = [new SqlParameter('p_id', null, DbType::INTEGER, ParameterMode::OUT)];
+        $call = $this->driver->prepare('sp_insert', [
+            new SqlParameter('p_iso', 'FR', DbType::STRING),
+            new SqlParameter('p_id', null, DbType::INTEGER, ParameterMode::OUT),
+            new SqlParameter('p_name', 'initial', DbType::STRING, ParameterMode::INOUT),
+        ]);
 
-        $this->driver->bindParameters($stmt, $params, $pdo);
-        $result = $this->driver->getOutputValues($params, $pdo);
+        // Simulate PDO writing the output values during execute()
+        $bound[':p_id'] = 42;
+        $bound[':p_name'] = 'France';
 
-        expect($result)->toBe(['p_id' => 42]);
+        expect($call->getOutputValues([]))->toBe(['p_id' => 42, 'p_name' => 'France']);
     });
 
-    it('clears references after retrieval', function () {
-        $stmt = Mockery::mock(PDOStatement::class);
-        $pdo = Mockery::mock(PDO::class);
+    it('keeps the output values of each call separate', function () {
+        $stmt = Mockery::mock(PDOStatement::class)->shouldIgnoreMissing();
+        $this->pdo->shouldReceive('prepare')->andReturn($stmt);
 
-        $stmt->shouldReceive('bindParam')
-            ->once()
-            ->withArgs(function ($placeholder, &$ref, $type, $size) {
-                $ref = 99;
-                return true;
-            });
+        $first = $this->driver->prepare('sp_a', [new SqlParameter('p_id', 1, DbType::INTEGER, ParameterMode::INOUT)]);
+        $second = $this->driver->prepare('sp_b', [new SqlParameter('p_id', 2, DbType::INTEGER, ParameterMode::INOUT)]);
 
-        $params = [new SqlParameter('p_id', null, DbType::INTEGER, ParameterMode::OUT)];
-
-        $this->driver->bindParameters($stmt, $params, $pdo);
-
-        // First call returns values
-        $first = $this->driver->getOutputValues($params, $pdo);
-        expect($first)->toBe(['p_id' => 99]);
-
-        // Second call returns null (references cleared)
-        $second = $this->driver->getOutputValues($params, $pdo);
-        expect($second)->toBe(['p_id' => null]);
+        expect($first->getOutputValues([]))->toBe(['p_id' => 1])
+            ->and($second->getOutputValues([]))->toBe(['p_id' => 2]);
     });
 });
-

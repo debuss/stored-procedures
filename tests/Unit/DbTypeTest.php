@@ -45,3 +45,19 @@ it('has all expected cases', function () {
     ]);
 });
 
+
+describe('fromValue()', function () {
+    it('infers the type of a value', function (mixed $value, DbType $expected) {
+        expect(DbType::fromValue($value))->toBe($expected);
+    })->with([
+        'null' => [null, DbType::NULL],
+        'bool' => [true, DbType::BOOLEAN],
+        'int' => [42, DbType::INTEGER],
+        'float' => [9.5, DbType::FLOAT],
+        'string' => ['France', DbType::STRING],
+        'date' => [new DateTimeImmutable(), DbType::DATETIME],
+        'int-backed enum' => [Tests\Fixtures\Status::Published, DbType::INTEGER],
+        'string-backed enum' => [Tests\Fixtures\Iso::France, DbType::STRING],
+        'array' => [[1, 2], DbType::STRING],
+    ]);
+});

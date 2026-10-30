@@ -9,65 +9,78 @@ use StoredProcedures\ParameterMode;
 use StoredProcedures\SqlParameter;
 
 /**
- * PostgreSQL driver for stored functions.
+ * PostgreSQL driver for stored functions and procedures.
  *
- * Uses the `SELECT * FROM function_name(...)` syntax. In PostgreSQL, OUT parameters
- * are returned as columns in the result set — they are NOT passed in the function call.
- * Only IN parameters appear in the generated SQL.
+ * Functions are called with `SELECT * FROM function_name(...)`, procedures with
+ * `CALL procedure_name(...)`. The routine kind is looked up in `pg_proc` and cached per name.
  *
- * If you need output values from a PG function, declare them as OUT in the function
- * definition and read them from the result set rows.
+ * Parameters use the named notation (`p_name => :p_name`), so they are matched by name
+ * and their order does not matter. OUT parameters are omitted for functions and passed
+ * as NULL for procedures, as PostgreSQL requires.
+ *
+ * PostgreSQL returns OUT and INOUT values as columns of the result row: they are available
+ * both in the rows and as output values.
  */
-class PgSql extends AbstractDriver implements DriverInterface
+class PgSql extends AbstractDriver
 {
 
     /**
-     * Build the SELECT * FROM function(...) syntax for PostgreSQL.
+     * Cache of routine kinds, keyed by routine name: true for a procedure, false for a function.
      *
-     * Only IN parameters are included as placeholders. OUT parameters are
-     * returned as columns in the result set by PostgreSQL automatically.
+     * @var array<string, bool>
+     */
+    private array $procedures = [];
+
+    /**
+     * Build the CALL (procedure) or SELECT * FROM (function) syntax for PostgreSQL.
      *
      * @inheritDoc
-     * @throws StoredProcedureException
      */
     public function getQuerySyntax(string $stored_procedure, array $parameters = []): string
     {
         $this->assertValidProcedureName($stored_procedure);
         $this->assertValidParameterNames($parameters);
 
-        $inParams = array_filter(
-            $parameters,
-            fn(SqlParameter $param): bool => $param->mode === ParameterMode::IN
+        if ($this->isProcedure($stored_procedure)) {
+            $arguments = array_map(
+                fn(SqlParameter $param): string => "{$param->name} => " . ($param->mode === ParameterMode::OUT ? 'NULL' : ":{$param->name}"),
+                $parameters
+            );
+
+            return "CALL {$stored_procedure}(" . implode(', ', $arguments) . ")";
+        }
+
+        $arguments = array_map(
+            fn(SqlParameter $param): string => "{$param->name} => :{$param->name}",
+            $this->inputParameters($parameters)
         );
 
-        $placeholders = array_map(
-            fn(SqlParameter $param): string => ":{$param->name}",
-            $inParams
-        );
-
-        return "SELECT * FROM {$stored_procedure}(" . implode(', ', $placeholders) . ")";
+        return "SELECT * FROM {$stored_procedure}(" . implode(', ', $arguments) . ")";
     }
 
     /**
-     * Bind IN parameters to the statement.
+     * Bind IN and INOUT parameters to the statement.
      *
-     * OUT parameters are ignored — PostgreSQL returns them as result set columns.
+     * OUT parameters are not bound — PostgreSQL returns them as result set columns.
      *
      * @inheritDoc
+     * @throws StoredProcedureException
      */
-    public function bindParameters(PDOStatement $statement, array $parameters, PDO $pdo): void
+    public function prepare(string $stored_procedure, array $parameters): Call
     {
-        foreach ($parameters as $parameter) {
-            if ($parameter->mode !== ParameterMode::IN) {
-                continue;
-            }
+        $statement = $this->pdo->prepare($this->getQuerySyntax($stored_procedure, $parameters));
 
+        foreach ($this->inputParameters($parameters) as $parameter) {
             $statement->bindValue(
                 ":{$parameter->name}",
-                $parameter->value,
+                $parameter->toPdoValue(),
                 $parameter->type->toPdoType()
             );
         }
+
+        $outputs = $this->outputParameters($parameters);
+
+        return new Call($statement, fn(array $row_sets): array => $this->readOutputColumns($outputs, $row_sets));
     }
 
     /**
@@ -84,14 +97,72 @@ class PgSql extends AbstractDriver implements DriverInterface
     }
 
     /**
-     * PostgreSQL functions return output values as columns in the result set,
-     * so there are no separate output variables to retrieve.
-     *
-     * @inheritDoc
-     * @return array Always empty — read output from the result set rows instead.
+     * @param SqlParameter[] $parameters
+     * @return SqlParameter[] The IN and INOUT parameters
      */
-    public function getOutputValues(array $parameters, PDO $pdo): array
+    private function inputParameters(array $parameters): array
     {
-        return [];
+        return array_filter(
+            $parameters,
+            fn(SqlParameter $param): bool => $param->mode !== ParameterMode::OUT
+        );
+    }
+
+    /**
+     * Read the output values from the columns of the first row.
+     *
+     * Unquoted identifiers are folded to lower case by PostgreSQL, so the
+     * lower-cased name is used when the exact name is not found.
+     *
+     * @param SqlParameter[] $parameters The OUT and INOUT parameters
+     * @param list<array<mixed>> $row_sets
+     * @return array<string, mixed>
+     */
+    private function readOutputColumns(array $parameters, array $row_sets): array
+    {
+        $row = $row_sets[0][0] ?? [];
+        $columns = is_object($row) ? get_object_vars($row) : (array) $row;
+
+        $outputs = [];
+        foreach ($parameters as $parameter) {
+            $outputs[$parameter->name] = $columns[$parameter->name] ?? $columns[strtolower($parameter->name)] ?? null;
+        }
+
+        return $outputs;
+    }
+
+    /**
+     * Check in the catalog whether the routine is a procedure (prokind = 'p').
+     *
+     * Unquoted identifiers are folded to lower case by PostgreSQL, so the name is
+     * lower-cased before the lookup. An unqualified name is resolved through the
+     * search_path. If the name is unknown or ambiguous, it is treated as a function.
+     */
+    private function isProcedure(string $name): bool
+    {
+        if (isset($this->procedures[$name])) {
+            return $this->procedures[$name];
+        }
+
+        $parts = explode('.', strtolower($name));
+        $routine = array_pop($parts);
+        $schema = array_pop($parts);
+
+        if ($schema === null) {
+            $statement = $this->pdo->prepare(
+                'SELECT DISTINCT p.prokind FROM pg_catalog.pg_proc p WHERE p.proname = ? AND pg_catalog.pg_function_is_visible(p.oid)'
+            );
+            $statement->execute([$routine]);
+        } else {
+            $statement = $this->pdo->prepare(
+                'SELECT DISTINCT p.prokind FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace WHERE p.proname = ? AND n.nspname = ?'
+            );
+            $statement->execute([$routine, $schema]);
+        }
+
+        $kinds = $statement->fetchAll(PDO::FETCH_COLUMN);
+        $statement->closeCursor();
+
+        return $this->procedures[$name] = $kinds === ['p'];
     }
 }
