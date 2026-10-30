@@ -154,3 +154,8 @@ it('requires every declared parameter when matching by name', function () {
     expect(fn() => $connection->execute('sp_insert_country', ['p_iso' => 'LU']))
         ->toThrow(StoredProcedureException::class, "Procedure 'sp_insert_country' expects the parameter 'p_name'.");
 });
+
+it('rejects a timeout, MySQL being unable to limit a stored procedure', function () {
+    expect(fn() => $this->connection->withTimeout(5)->query('sp_fetch_all_countries'))
+        ->toThrow(StoredProcedureException::class, 'MySQL cannot limit the execution time of a stored procedure');
+});

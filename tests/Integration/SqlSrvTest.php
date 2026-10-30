@@ -5,6 +5,7 @@ use StoredProcedures\Exception\ExecutionException;
 use StoredProcedures\Exception\NoResultsException;
 use StoredProcedures\Exception\ProcedureErrorException;
 use StoredProcedures\Exception\StoredProcedureException;
+use StoredProcedures\Exception\TimeoutException;
 use StoredProcedures\SqlConnection;
 use Tests\Fixtures\Country;
 use Tests\Fixtures\Iso;
@@ -153,4 +154,18 @@ it('uses the default value of the parameters omitted when matching by name', fun
     $countries = $connection->query('dbo.sp_fetch_countries_page', ['p_offset' => 1, 'p_letter' => 'N'], Country::class)->rows();
 
     expect(array_column($countries, 'iso'))->toBe(['NO']);
+});
+
+it('cancels a call longer than the timeout', function () {
+    $start = microtime(true);
+
+    expect(fn() => $this->connection->procedure('sp_sleep')->timeout(1)->input('p_seconds', 3)->execute())
+        ->toThrow(TimeoutException::class, 'Query timeout expired');
+
+    expect(microtime(true) - $start)->toBeLessThan(2.5)
+        ->and($this->connection->queryScalar('sp_count_countries'))->toBeGreaterThanOrEqual(10);
+});
+
+it('completes a call shorter than the timeout', function () {
+    expect((int) $this->connection->withTimeout(5)->procedure('sp_sleep')->input('p_seconds', 1)->scalar())->toBe(1);
 });

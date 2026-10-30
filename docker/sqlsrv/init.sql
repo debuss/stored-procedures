@@ -174,3 +174,17 @@ BEGIN
     OFFSET @p_offset ROWS FETCH NEXT @p_limit ROWS ONLY;
 END;
 GO
+
+-- 12. Wait for a number of seconds (timeouts)
+IF OBJECT_ID('sp_sleep', 'P') IS NOT NULL DROP PROCEDURE sp_sleep;
+GO
+CREATE PROCEDURE sp_sleep
+    @p_seconds INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DECLARE @delay DATETIME = DATEADD(SECOND, @p_seconds, 0);
+    WAITFOR DELAY @delay;
+    SELECT @p_seconds AS slept;
+END;
+GO

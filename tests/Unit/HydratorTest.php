@@ -10,6 +10,12 @@ use Tests\Fixtures\Status;
 
 covers(Hydrator::class);
 
+// Type handlers are global: remove the ones registered by the tests
+afterEach(function () {
+    Hydrator::removeTypeHandler(Tests\Fixtures\Code::class);
+    Hydrator::removeTypeHandler('bool');
+});
+
 describe('constructor mapping', function () {
     it('maps an array row to the constructor parameters, coercing scalar values', function () {
         $country = Hydrator::hydrate(['id' => '1', 'iso' => 'FR', 'name' => 'France'], Country::class);
@@ -141,5 +147,89 @@ describe('special cases', function () {
     it('throws for a class that cannot be instantiated', function () {
         expect(fn() => Hydrator::hydrate(['id' => 1], DateTimeInterface::class))
             ->toThrow(MappingException::class, 'the class is not instantiable');
+    });
+});
+
+describe('Column attribute', function () {
+    it('maps a constructor parameter to the column given by the attribute', function () {
+        Hydrator::addTypeHandler(Tests\Fixtures\Code::class, fn(string $value) => new Tests\Fixtures\Code($value));
+
+        $product = Hydrator::hydrate(['PRODUCT_CODE' => 'ABC-1', 'label' => 'Keyboard'], Tests\Fixtures\Product::class);
+
+        expect((string) $product->code)->toBe('ABC-1')
+            ->and($product->name)->toBe('Keyboard');
+    });
+
+    it('no longer maps the member own name', function () {
+        expect(fn() => Hydrator::hydrate(['code' => 'ABC-1', 'name' => 'Keyboard'], Tests\Fixtures\Product::class))
+            ->toThrow(MappingException::class, 'no column for the parameter $code');
+    });
+
+    it('maps a property to the column given by the attribute', function () {
+        $country = Hydrator::hydrate(['cntry_iso' => 'FR', 'cntry_name' => 'France', 'name' => 'ignored'], Tests\Fixtures\LegacyCountry::class);
+
+        expect($country->iso)->toBe('FR')
+            ->and($country->name)->toBe('France');
+    });
+});
+
+describe('JSON columns', function () {
+    beforeEach(function () {
+        Hydrator::addTypeHandler(Tests\Fixtures\Code::class, fn(string $value) => new Tests\Fixtures\Code($value));
+        $this->row = ['product_code' => 'ABC-1', 'label' => 'Keyboard'];
+    });
+
+    it('decodes the JSON string of an array column', function () {
+        $product = Hydrator::hydrate($this->row + ['tags' => '["usb","azerty"]', 'attributes' => '{"color":"black","keys":105}'], Tests\Fixtures\Product::class);
+
+        expect($product->tags)->toBe(['usb', 'azerty'])
+            ->and($product->attributes)->toBe(['color' => 'black', 'keys' => 105]);
+    });
+
+    it('keeps null and already decoded values', function () {
+        $product = Hydrator::hydrate($this->row + ['tags' => ['usb'], 'attributes' => null], Tests\Fixtures\Product::class);
+
+        expect($product->tags)->toBe(['usb'])
+            ->and($product->attributes)->toBeNull();
+    });
+
+    it('throws for invalid JSON', function () {
+        expect(fn() => Hydrator::hydrate($this->row + ['tags' => '[usb'], Tests\Fixtures\Product::class))
+            ->toThrow(MappingException::class, 'Cannot map the row to Tests\Fixtures\Product: Syntax error');
+    });
+});
+
+describe('type handlers', function () {
+    it('converts the values of the registered type, whatever the case and leading backslash', function () {
+        Hydrator::addTypeHandler('\TESTS\FIXTURES\CODE', fn(string $value) => new Tests\Fixtures\Code(strtoupper($value)));
+
+        $product = Hydrator::hydrate(['product_code' => 'abc-1', 'label' => 'Keyboard'], Tests\Fixtures\Product::class);
+
+        expect($product->code)->toEqual(new Tests\Fixtures\Code('ABC-1'));
+    });
+
+    it('replaces the built-in conversion of the type', function () {
+        Hydrator::addTypeHandler(Tests\Fixtures\Code::class, fn(string $value) => new Tests\Fixtures\Code($value));
+        Hydrator::addTypeHandler('bool', fn(string $value): bool => $value === 't');
+
+        $product = Hydrator::hydrate(['product_code' => 'ABC-1', 'label' => 'Keyboard', 'active' => 'f'], Tests\Fixtures\Product::class);
+
+        // Without the handler, the non-empty string 'f' would be coerced to true
+        expect($product->active)->toBeFalse();
+    });
+
+    it('throws a MappingException when the handler fails', function () {
+        Hydrator::addTypeHandler(Tests\Fixtures\Code::class, fn(string $value) => new Tests\Fixtures\Code($value));
+
+        expect(fn() => Hydrator::hydrate(['product_code' => 'nope', 'label' => 'Keyboard'], Tests\Fixtures\Product::class))
+            ->toThrow(MappingException::class, "Cannot map the row to Tests\Fixtures\Product: the type handler of Tests\Fixtures\Code failed: Invalid code 'nope'.");
+    });
+
+    it('stops converting the type once the handler is removed', function () {
+        Hydrator::addTypeHandler(Tests\Fixtures\Code::class, fn(string $value) => new Tests\Fixtures\Code($value));
+        Hydrator::removeTypeHandler(Tests\Fixtures\Code::class);
+
+        expect(fn() => Hydrator::hydrate(['product_code' => 'ABC-1', 'label' => 'Keyboard'], Tests\Fixtures\Product::class))
+            ->toThrow(MappingException::class, 'must be of type Tests\Fixtures\Code, string given');
     });
 });

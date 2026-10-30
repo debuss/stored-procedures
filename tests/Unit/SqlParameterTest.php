@@ -107,3 +107,11 @@ describe('toPdoValue()', function () {
             ->toThrow(StoredProcedures\Exception\StoredProcedureException::class, "Parameter 'p_color': the enum Tests\Fixtures\Color must be backed to be bound.");
     });
 });
+
+describe('toPdoValue() with Stringable objects', function () {
+    it('binds a Stringable object as its string', function () {
+        $param = new SqlParameter('p_code', new Tests\Fixtures\Code('ABC-1'), DbType::STRING);
+
+        expect($param->toPdoValue())->toBe('ABC-1');
+    });
+});

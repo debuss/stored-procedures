@@ -51,6 +51,20 @@ class Procedure
     }
 
     /**
+     * Limit the duration of this call, instead of the timeout of the connection.
+     *
+     * @param int|null $seconds The maximum duration of the call, or null for none
+     * @throws StoredProcedureException When the timeout is not a positive number of seconds
+     * @see SqlConnection::withTimeout()
+     */
+    public function timeout(?int $seconds): self
+    {
+        $this->connection = $this->connection->withTimeout($seconds);
+
+        return $this;
+    }
+
+    /**
      * Execute the procedure (INSERT/UPDATE/DELETE) and return the result set
      * containing affected rows and any output parameter values.
      *

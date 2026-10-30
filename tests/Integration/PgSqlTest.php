@@ -5,6 +5,7 @@ use StoredProcedures\Exception\ExecutionException;
 use StoredProcedures\Exception\NoResultsException;
 use StoredProcedures\Exception\ProcedureErrorException;
 use StoredProcedures\Exception\StoredProcedureException;
+use StoredProcedures\Exception\TimeoutException;
 use StoredProcedures\SqlConnection;
 use Tests\Fixtures\Country;
 use Tests\Fixtures\Iso;
@@ -170,4 +171,32 @@ it('converts the other database errors', function () {
         ->toThrow(fn(ExecutionException $e) => expect($e)->not->toBeInstanceOf(ProcedureErrorException::class)
             ->and($e->getSqlState())->toBe('42883')
             ->and($e->getMessage())->toContain('function fn_does_not_exist() does not exist'));
+});
+
+it('cancels a call longer than the timeout', function () {
+    $start = microtime(true);
+
+    expect(fn() => $this->connection->procedure('fn_sleep')->timeout(1)->input('p_seconds', 3)->execute())
+        ->toThrow(TimeoutException::class, 'canceling statement due to statement timeout');
+
+    expect(microtime(true) - $start)->toBeLessThan(2.5);
+});
+
+it('restores statement_timeout after a call within a transaction', function () {
+    $before = $this->pdo->query('SHOW statement_timeout')->fetchColumn();
+
+    expect($this->connection->withTimeout(5)->procedure('fn_sleep')->input('p_seconds', 0)->scalar())->toBe(0)
+        ->and($this->pdo->query('SHOW statement_timeout')->fetchColumn())->toBe($before);
+});
+
+it('restores statement_timeout after a call outside a transaction, even when it times out', function () {
+    $this->pdo->rollBack();
+    $before = $this->pdo->query('SHOW statement_timeout')->fetchColumn();
+    $connection = $this->connection->withTimeout(1);
+
+    $connection->procedure('fn_sleep')->input('p_seconds', 0)->scalar();
+    expect($this->pdo->query('SHOW statement_timeout')->fetchColumn())->toBe($before);
+
+    expect(fn() => $connection->procedure('fn_sleep')->input('p_seconds', 3)->scalar())->toThrow(TimeoutException::class);
+    expect($this->pdo->query('SHOW statement_timeout')->fetchColumn())->toBe($before);
 });

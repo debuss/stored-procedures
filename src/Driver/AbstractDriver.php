@@ -8,6 +8,7 @@ use PDOStatement;
 use StoredProcedures\Exception\ExecutionException;
 use StoredProcedures\Exception\ProcedureErrorException;
 use StoredProcedures\Exception\StoredProcedureException;
+use StoredProcedures\Exception\TimeoutException;
 use StoredProcedures\ParameterMode;
 use StoredProcedures\SqlParameter;
 
@@ -161,9 +162,21 @@ abstract class AbstractDriver implements DriverInterface
         $code = is_int($code) ? $this->driverCode($code) : null;
         $message = $this->cleanMessage(is_string($message) && $message !== '' ? $message : $exception->getMessage());
 
-        return $this->isRaisedError($sql_state, $code)
-            ? new ProcedureErrorException($message, $stored_procedure, $sql_state, $code, $exception)
-            : new ExecutionException($message, $stored_procedure, $sql_state, $code, $exception);
+        $class = match (true) {
+            $this->isTimeout($sql_state, $code) => TimeoutException::class,
+            $this->isRaisedError($sql_state, $code) => ProcedureErrorException::class,
+            default => ExecutionException::class,
+        };
+
+        return new $class($message, $stored_procedure, $sql_state, $code, $exception);
+    }
+
+    /**
+     * Tell whether the call was canceled because it took longer than the timeout.
+     */
+    protected function isTimeout(string $sql_state, ?int $code): bool
+    {
+        return false;
     }
 
     /**

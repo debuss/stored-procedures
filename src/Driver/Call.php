@@ -17,11 +17,28 @@ final readonly class Call
     /**
      * @param PDOStatement $statement The prepared statement, parameters already bound
      * @param Closure(list<array<mixed>>): array<string, mixed> $outputs Reads the output values, given the fetched row sets
+     * @param (Closure(PDOStatement): void)|null $execute Executes the statement, when it takes more than
+     *                                                    PDOStatement::execute() (e.g. to apply a timeout)
      */
     public function __construct(
         public PDOStatement $statement,
-        private Closure $outputs
+        private Closure $outputs,
+        private ?Closure $execute = null
     ) {}
+
+    /**
+     * Execute the prepared statement.
+     */
+    public function execute(): void
+    {
+        if ($this->execute === null) {
+            $this->statement->execute();
+
+            return;
+        }
+
+        ($this->execute)($this->statement);
+    }
 
     /**
      * Get the output parameter values, keyed by parameter name.

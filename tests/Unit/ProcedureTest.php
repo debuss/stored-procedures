@@ -233,7 +233,7 @@ describe('parameter overwrite', function () {
 
         $driver->shouldReceive('prepare')
             ->once()
-            ->with('sp_test', Mockery::on(fn(array $params): bool => $params == [new SqlParameter('p_name', 'Germany', DbType::STRING)]))
+            ->with('sp_test', Mockery::on(fn(array $params): bool => $params == [new SqlParameter('p_name', 'Germany', DbType::STRING)]), null)
             ->andReturn(new Call($stmt, fn(): array => []));
         $stmt->shouldReceive('execute')->once();
         $stmt->shouldReceive('closeCursor')->once();
@@ -257,7 +257,7 @@ describe('type inference', function () {
 
         $driver->shouldReceive('prepare')
             ->once()
-            ->with('sp_test', Mockery::on(fn(array $params): bool => array_map(fn(SqlParameter $p) => $p->type, $params) == [DbType::INTEGER, DbType::DATETIME, DbType::BOOLEAN]))
+            ->with('sp_test', Mockery::on(fn(array $params): bool => array_map(fn(SqlParameter $p) => $p->type, $params) == [DbType::INTEGER, DbType::DATETIME, DbType::BOOLEAN]), null)
             ->andReturn(new Call($stmt, fn(): array => []));
         $stmt->shouldReceive('execute')->once();
         $stmt->shouldReceive('closeCursor')->once();
@@ -274,7 +274,7 @@ describe('type inference', function () {
 
         $driver->shouldReceive('prepare')
             ->once()
-            ->with('sp_test', Mockery::on(fn(array $params): bool => $params[0]->type === DbType::STRING))
+            ->with('sp_test', Mockery::on(fn(array $params): bool => $params[0]->type === DbType::STRING), null)
             ->andReturn(new Call($stmt, fn(): array => []));
         $stmt->shouldReceive('execute')->once();
         $stmt->shouldReceive('closeCursor')->once();
