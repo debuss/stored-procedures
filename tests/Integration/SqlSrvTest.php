@@ -169,3 +169,11 @@ it('cancels a call longer than the timeout', function () {
 it('completes a call shorter than the timeout', function () {
     expect((int) $this->connection->withTimeout(5)->procedure('sp_sleep')->input('p_seconds', 1)->scalar())->toBe(1);
 });
+
+it('decodes a JSON column to an array', function () {
+    $summary = $this->connection->querySingle('sp_fetch_countries_summary', [], Tests\Fixtures\CountrySummary::class);
+
+    expect($summary->total)->toBeGreaterThanOrEqual(10)
+        ->and($summary->isos)->toHaveCount($summary->total)
+        ->and($summary->isos)->toContain('FR', 'DE');
+});

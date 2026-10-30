@@ -200,3 +200,11 @@ it('restores statement_timeout after a call outside a transaction, even when it 
     expect(fn() => $connection->procedure('fn_sleep')->input('p_seconds', 3)->scalar())->toThrow(TimeoutException::class);
     expect($this->pdo->query('SHOW statement_timeout')->fetchColumn())->toBe($before);
 });
+
+it('decodes a JSON column to an array', function () {
+    $summary = $this->connection->querySingle('fn_fetch_countries_summary', [], Tests\Fixtures\CountrySummary::class);
+
+    expect($summary->total)->toBeGreaterThanOrEqual(10)
+        ->and($summary->isos)->toHaveCount($summary->total)
+        ->and($summary->isos)->toContain('FR', 'DE');
+});
