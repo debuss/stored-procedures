@@ -328,6 +328,8 @@ php docker/pgsql/pgsql.php
 php docker/sqlsrv/sqlsrv.php
 ```
 
+The demo scripts map the rows to the `Country` class of `docker/models.php`, and run in a transaction rolled back at the end: they leave the database unchanged and can be run again.
+
 ## License
 
 MIT © Alexandre Debusschère  
