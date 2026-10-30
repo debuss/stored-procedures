@@ -14,8 +14,10 @@ Built for teams where direct SQL queries are forbidden and all database access g
 - `OUT` and `INOUT` parameter support (driver-specific handling is abstracted away)
 - Immutable `ResultSet` with multi-row-set navigation, iteration, and counting
 - Named parameter validation to prevent SQL injection
-- Specific exception hierarchy for clean error handling
-- Requires only `ext-pdo` — no ORM, no query builder, no framework dependency
+- Specific exception hierarchy for clean error handling, with the business errors raised by the procedures told apart
+- Optional parameter matching by name on MySQL and SQL Server, like `SqlCommand` in .NET
+- [PSR-3](https://www.php-fig.org/psr/psr-3/) logging of the calls and failures
+- Requires only `ext-pdo` and `psr/log` — no ORM, no query builder, no framework dependency
 - Tested with [Pest](https://pestphp.com) + [Mockery](https://github.com/mockery/mockery)
 
 ## Requirements
@@ -177,10 +179,28 @@ $newId = $row->p_id; // OUT column
 | Driver | Parameters are matched… |
 |--------|-------------------------|
 | **PostgreSQL** | **by name** (named notation `fn(p_name => :p_name)`): the order does not matter, but the names must match the routine's argument names |
-| **MySQL** / **SQL Server** | **by position**: pass them in the order they are declared in the procedure |
+| **MySQL** / **SQL Server** | **by position** by default: pass them in the order they are declared in the procedure. **By name** with `match_parameters_by_name: true` |
 
 > [!WARNING]
-> With MySQL and SQL Server, parameter names are only used as placeholders. Passing parameters in the wrong order silently swaps their values.
+> By default, with MySQL and SQL Server, parameter names are only used as placeholders. Passing parameters in the wrong order silently swaps their values.
+
+To match them by name, like `SqlCommand` with `CommandType.StoredProcedure` in .NET, enable the `match_parameters_by_name` option:
+
+```php
+$connection = new SqlConnection($pdo, match_parameters_by_name: true);
+
+// Any order, names matched case-insensitively
+$connection->execute('sp_insert_country', ['p_name' => 'Finland', 'p_iso' => 'FI']);
+
+// A typo is reported before the call:
+// "Procedure 'sp_insert_country' has no parameter named 'p_nme'. Declared parameters: p_iso, p_name."
+$connection->execute('sp_insert_country', ['p_iso' => 'FI', 'p_nme' => 'Finland']);
+```
+
+- The declared parameters are read from `INFORMATION_SCHEMA` once per procedure and connection (one extra query per procedure).
+- **SQL Server**: the parameters not given use their default value (`DEFAULT`). Catalog-qualified names (`db.dbo.sp`) are not looked up and keep the given order.
+- **MySQL**: procedures have no default values, so every declared parameter must be given.
+- A procedure not found in `INFORMATION_SCHEMA` (e.g. not visible to the user) keeps the given order: the database reports the error, if any.
 
 ### Fluent Procedure Builder
 
@@ -279,13 +299,57 @@ $result = $connection->query('sp_search', [
 
 The correct driver is resolved automatically from `PDO::ATTR_DRIVER_NAME`.
 
+## Error Handling
+
+The errors reported by the database are converted to an `ExecutionException`, with the procedure name, the SQLSTATE, the database error code and a clean message (without the driver prefixes such as `[Microsoft][ODBC Driver 18 for SQL Server]`). The original `PDOException` is available with `getPrevious()`.
+
+The errors **raised on purpose by the procedure**, usually business rule violations, are converted to its subclass `ProcedureErrorException`:
+
+| Database | Raised with | Recognized by |
+|----------|-------------|---------------|
+| **MySQL** | `SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = '…'` | SQLSTATE `45000` or error code 1644 |
+| **PostgreSQL** | `RAISE EXCEPTION '…'` | SQLSTATE `P0001` |
+| **SQL Server** | `THROW 50001, '…', 1` or `RAISERROR('…', 16, 1)` | error number ≥ 50000 |
+
+```php
+use StoredProcedures\Exception\{ExecutionException, ProcedureErrorException};
+
+try {
+    $connection->execute('sp_transfer', ['p_from' => 1, 'p_to' => 2, 'p_amount' => 500]);
+} catch (ProcedureErrorException $e) {
+    // Business error: show $e->getMessage() ("Insufficient balance")
+} catch (ExecutionException $e) {
+    // Technical error: $e->getProcedure(), $e->getSqlState(), $e->getDriverCode()
+}
+```
+
+`getDriverCode()` returns `null` with PostgreSQL, which has no error codes besides the SQLSTATE.
+
+## Logging
+
+Pass a [PSR-3](https://www.php-fig.org/psr/psr-3/) logger (Monolog, the Laravel or Symfony logger…) to the constructor, or with `setLogger()`:
+
+```php
+$connection = new SqlConnection($pdo, $logger);
+```
+
+| Event | Level | Context |
+|-------|-------|---------|
+| Successful call | `debug` | `procedure`, `parameters`, `duration_ms` |
+| Error raised by the procedure (`ProcedureErrorException`) | `warning` | + `message`, `sql_state`, `exception` |
+| Other failure | `error` | + `message`, `sql_state`, `exception` |
+
+Only the parameter **names** are logged, never their values, which may hold personal data or credentials.
+
 ## Exceptions
 
 All exceptions extend `StoredProcedureException` for easy catch-all handling:
 
 | Exception | Thrown when |
 |-----------|------------|
-| `StoredProcedureException` | Base class — invalid procedure/parameter names, numeric array keys, etc. |
+| `StoredProcedureException` | Base class — invalid procedure/parameter names, numeric array keys, unknown parameter names, etc. |
+| `ExecutionException` | The database reports an error during the call |
+| `ProcedureErrorException` | The procedure raises an error on purpose (subclass of `ExecutionException`) |
 | `NoResultsException` | `queryFirst()` or `querySingle()` returns zero rows |
 | `MultipleResultsException` | `querySingle()` returns more than one row |
 | `MappingException` | A row cannot be mapped to the requested class |

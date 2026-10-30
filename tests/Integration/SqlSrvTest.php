@@ -1,7 +1,10 @@
 <?php
 
 use StoredProcedures\DbType;
+use StoredProcedures\Exception\ExecutionException;
 use StoredProcedures\Exception\NoResultsException;
+use StoredProcedures\Exception\ProcedureErrorException;
+use StoredProcedures\Exception\StoredProcedureException;
 use StoredProcedures\SqlConnection;
 use Tests\Fixtures\Country;
 use Tests\Fixtures\Iso;
@@ -104,4 +107,50 @@ it('round-trips a date parameter to a date property', function () {
         ->single(Moment::class);
 
     expect($moment->value->format('Y-m-d H:i:s'))->toBe('2026-10-30 12:34:56');
+});
+
+it('converts the errors raised by the procedure', function () {
+    try {
+        $this->connection->execute('sp_raise_error', ['p_message' => 'Country ZZ not found']);
+        $this->fail('No exception thrown');
+    } catch (ProcedureErrorException $e) {
+        expect($e->getMessage())->toBe('Country ZZ not found')
+            ->and($e->getProcedure())->toBe('sp_raise_error')
+            ->and($e->getSqlState())->toBe('42000')
+            ->and($e->getDriverCode())->toBe(50001);
+    }
+});
+
+it('converts the other database errors', function () {
+    expect(fn() => $this->connection->execute('sp_does_not_exist'))
+        ->toThrow(fn(ExecutionException $e) => expect($e)->not->toBeInstanceOf(ProcedureErrorException::class)
+            ->and($e->getSqlState())->toBe('42000')
+            ->and($e->getMessage())->toContain("Could not find stored procedure 'sp_does_not_exist'"));
+});
+
+it('matches the parameters by name when enabled', function () {
+    $connection = new SqlConnection($this->pdo, match_parameters_by_name: true);
+
+    $result = $connection
+        ->procedure('sp_search_and_return_country')
+        ->inout('p_name', '', DbType::STRING, 100)
+        ->input('P_ISO', 'FR')
+        ->execute();
+
+    expect($result->getOutputValue('p_name'))->toBe('France');
+});
+
+it('rejects a parameter not declared by the procedure when matching by name', function () {
+    $connection = new SqlConnection($this->pdo, match_parameters_by_name: true);
+
+    expect(fn() => $connection->query('sp_fetch_country_by_iso', ['p_isoo' => 'FR']))
+        ->toThrow(StoredProcedureException::class, "Procedure 'sp_fetch_country_by_iso' has no parameter named 'p_isoo'. Declared parameters: p_iso.");
+});
+
+it('uses the default value of the parameters omitted when matching by name', function () {
+    $connection = new SqlConnection($this->pdo, match_parameters_by_name: true);
+
+    $countries = $connection->query('dbo.sp_fetch_countries_page', ['p_offset' => 1, 'p_letter' => 'N'], Country::class)->rows();
+
+    expect(array_column($countries, 'iso'))->toBe(['NO']);
 });

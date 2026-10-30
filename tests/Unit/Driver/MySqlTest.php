@@ -177,3 +177,14 @@ describe('output values', function () {
         expect($call->getOutputValues([]))->toBe(['p_id' => null]);
     });
 });
+
+describe('fetchRowSets()', function () {
+    it('fetches every row set that has columns', function () {
+        $stmt = Mockery::mock(PDOStatement::class);
+        $stmt->shouldReceive('columnCount')->andReturn(2, 0, 1);
+        $stmt->shouldReceive('fetchAll')->twice()->andReturn([['id' => 1]], [['total' => 3]]);
+        $stmt->shouldReceive('nextRowset')->andReturn(true, true, false);
+
+        expect($this->driver->fetchRowSets($stmt))->toBe([[['id' => 1]], [['total' => 3]]]);
+    });
+});

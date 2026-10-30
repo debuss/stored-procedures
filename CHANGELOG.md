@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Breaking changes
+
+- The errors reported by the database are thrown as `ExecutionException` (a `StoredProcedureException`) instead of `PDOException`. The `PDOException` is available with `getPrevious()`.
+- `psr/log` is required.
+
+### Added
+
+- `ExecutionException`, with the procedure name, the SQLSTATE, the database error code and a message without the driver prefixes, and its subclass `ProcedureErrorException` for the errors raised on purpose by the procedure (`SIGNAL`, `RAISE EXCEPTION`, `THROW`/`RAISERROR`).
+- `match_parameters_by_name` option: on MySQL and SQL Server, the parameters are matched by name to the ones declared in `INFORMATION_SCHEMA` (unknown names are rejected; SQL Server uses the default value of the parameters not given).
+- PSR-3 logging of the calls (`debug`) and failures (`warning`/`error`), with the parameter names but not their values.
+
 ## [0.2.0] - 2026-10-30
 
 ### Breaking changes

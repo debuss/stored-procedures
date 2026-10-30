@@ -15,7 +15,7 @@ use StoredProcedures\SqlParameter;
  * `CALL procedure_name(...)`. The routine kind is looked up in `pg_proc` and cached per name.
  *
  * Parameters use the named notation (`p_name => :p_name`), so they are matched by name
- * and their order does not matter. OUT parameters are omitted for functions and passed
+ * and their order does not matter (whatever the match_parameters_by_name option). OUT parameters are omitted for functions and passed
  * as NULL for procedures, as PostgreSQL requires.
  *
  * PostgreSQL returns OUT and INOUT values as columns of the result row: they are available
@@ -129,6 +129,30 @@ class PgSql extends AbstractDriver
         }
 
         return $outputs;
+    }
+
+    /**
+     * RAISE EXCEPTION without ERRCODE uses the SQLSTATE 'P0001' (raise_exception).
+     */
+    protected function isRaisedError(string $sql_state, ?int $code): bool
+    {
+        return $sql_state === 'P0001';
+    }
+
+    /**
+     * PDO reports the same libpq status (7, PGRES_FATAL_ERROR) for every error: use the SQLSTATE instead.
+     */
+    protected function driverCode(int $code): ?int
+    {
+        return null;
+    }
+
+    /**
+     * Remove the "ERROR:  " prefix, and the CONTEXT, DETAIL and HINT lines.
+     */
+    protected function cleanMessage(string $message): string
+    {
+        return parent::cleanMessage(preg_replace('/^ERROR:\s+/', '', $message) ?? $message);
     }
 
     /**

@@ -4,22 +4,34 @@ namespace StoredProcedures;
 
 use Closure;
 use PDO;
+use PDOException;
 use PDOStatement;
+use Psr\Log\LoggerAwareInterface;
+use Psr\Log\LoggerInterface;
+use Psr\Log\LogLevel;
 use stdClass;
 use StoredProcedures\Driver\{Call, DriverInterface, MySql, PgSql, SqlSrv};
-use StoredProcedures\Exception\{MultipleResultsException, NoResultsException, StoredProcedureException, UnsupportedDriverException};
+use StoredProcedures\Exception\{ExecutionException, MultipleResultsException, NoResultsException, ProcedureErrorException, StoredProcedureException, UnsupportedDriverException};
 
-class SqlConnection
+class SqlConnection implements LoggerAwareInterface
 {
 
     protected DriverInterface $driver;
 
     /**
+     * @param PDO $pdo
+     * @param LoggerInterface|null $logger Logs each call (debug) and each failure (warning for the errors raised by
+     *                                     the procedure, error otherwise), with the parameter names but not their values
+     * @param bool $match_parameters_by_name MySQL and SQL Server: match the parameters to the ones declared by the
+     *                                       procedure by name, instead of by position (one metadata query per procedure).
+     *                                       PostgreSQL always matches them by name.
      * @throws StoredProcedureException When PDO is not in the PDO::ERRMODE_EXCEPTION error mode
      * @throws UnsupportedDriverException
      */
     public function __construct(
-        protected PDO $pdo
+        protected PDO $pdo,
+        protected ?LoggerInterface $logger = null,
+        bool $match_parameters_by_name = false
     ) {
         // Errors are reported with exceptions: in the other modes, a failing call would go unnoticed
         if ($this->pdo->getAttribute(PDO::ATTR_ERRMODE) !== PDO::ERRMODE_EXCEPTION) {
@@ -29,9 +41,9 @@ class SqlConnection
         $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
 
         $this->driver = match ($driver) {
-            'mysql' => new MySql($this->pdo),
-            'pgsql' => new PgSql($this->pdo),
-            'sqlsrv', 'dblib' => new SqlSrv($this->pdo),
+            'mysql' => new MySql($this->pdo, $match_parameters_by_name),
+            'pgsql' => new PgSql($this->pdo, $match_parameters_by_name),
+            'sqlsrv', 'dblib' => new SqlSrv($this->pdo, $match_parameters_by_name),
             default => throw new UnsupportedDriverException("Unsupported database driver: $driver"),
         };
     }
@@ -44,6 +56,11 @@ class SqlConnection
     public function getPdo(): PDO
     {
         return $this->pdo;
+    }
+
+    public function setLogger(LoggerInterface $logger): void
+    {
+        $this->logger = $logger;
     }
 
     public function procedure(string $stored_procedure): Procedure
@@ -80,14 +97,15 @@ class SqlConnection
      */
     public function query(string $stored_procedure, array $parameters = [], ?string $class = null): ResultSet
     {
-        // The affected rows must be read before the row sets are fetched
-        [[$affected_rows, $row_sets], $call] = $this->run(
-            $stored_procedure,
-            $parameters,
-            fn(PDOStatement $statement): array => [$statement->rowCount(), $this->driver->fetchRowSets($statement)]
-        );
+        return $this->invoke($stored_procedure, $parameters, function (Call $call) use ($class): ResultSet {
+            // The affected rows must be read before the row sets are fetched
+            [$affected_rows, $row_sets] = $this->fetch(
+                $call,
+                fn(PDOStatement $statement): array => [$statement->rowCount(), $this->driver->fetchRowSets($statement)]
+            );
 
-        return new ResultSet($row_sets, $call->getOutputValues($row_sets), $affected_rows, $class);
+            return new ResultSet($row_sets, $call->getOutputValues($row_sets), $affected_rows, $class);
+        });
     }
 
     /**
@@ -104,7 +122,7 @@ class SqlConnection
      */
     public function queryFirst(string $stored_procedure, array $parameters = [], ?string $class = null): array|object
     {
-        [$row] = $this->run($stored_procedure, $parameters, fn(PDOStatement $statement): mixed => $statement->fetch());
+        $row = $this->run($stored_procedure, $parameters, fn(PDOStatement $statement): mixed => $statement->fetch());
 
         if ($row === false) {
             throw new NoResultsException("No results found for '$stored_procedure'.");
@@ -150,7 +168,7 @@ class SqlConnection
     public function querySingle(string $stored_procedure, array $parameters = [], ?string $class = null): array|object
     {
         // pdo_sqlsrv throws when fetching past the end of the result set
-        [[$first, $second]] = $this->run(
+        [$first, $second] = $this->run(
             $stored_procedure,
             $parameters,
             fn(PDOStatement $statement): array => ($row = $statement->fetch()) === false ? [false, false] : [$row, $statement->fetch()]
@@ -199,7 +217,7 @@ class SqlConnection
     public function queryScalar(string $stored_procedure, array $parameters = []): mixed
     {
         // fetchColumn() cannot tell a false value from no rows
-        [$row] = $this->run($stored_procedure, $parameters, fn(PDOStatement $statement): mixed => $statement->fetch(PDO::FETCH_NUM));
+        $row = $this->run($stored_procedure, $parameters, fn(PDOStatement $statement): mixed => $statement->fetch(PDO::FETCH_NUM));
 
         return $row === false ? null : $row[0];
     }
@@ -211,21 +229,93 @@ class SqlConnection
      * @param string $stored_procedure
      * @param array<string, mixed>|SqlParameter[] $parameters
      * @param Closure(PDOStatement): T $fetch Fetches the result from the executed statement
-     * @return array{T, Call} The fetched result, and the call to read the output values from
+     * @return T
      * @throws StoredProcedureException
      */
-    private function run(string $stored_procedure, array $parameters, Closure $fetch): array
+    private function run(string $stored_procedure, array $parameters, Closure $fetch): mixed
     {
-        $call = $this->driver->prepare($stored_procedure, $this->normalizeParameters($parameters));
+        return $this->invoke($stored_procedure, $parameters, fn(Call $call): mixed => $this->fetch($call, $fetch));
+    }
+
+    /**
+     * Prepare the call to a stored procedure and run the operation on it.
+     *
+     * The call is logged, and the errors reported by the database are converted to ExecutionException.
+     *
+     * @template T
+     * @param string $stored_procedure
+     * @param array<string, mixed>|SqlParameter[] $parameters
+     * @param Closure(Call): T $operation
+     * @return T
+     * @throws StoredProcedureException
+     */
+    private function invoke(string $stored_procedure, array $parameters, Closure $operation): mixed
+    {
+        $parameters = $this->normalizeParameters($parameters);
+        $context = [
+            'procedure' => $stored_procedure,
+            'parameters' => array_map(fn(SqlParameter $parameter): string => $parameter->name, $parameters),
+        ];
+        $start = hrtime(true);
 
         try {
+            $result = $operation($this->driver->prepare($stored_procedure, $parameters));
+        } catch (PDOException $e) {
+            throw $this->logFailure($this->driver->convertException($stored_procedure, $e), $context, $start);
+        } catch (StoredProcedureException $e) {
+            throw $this->logFailure($e, $context, $start);
+        }
+
+        $this->logger?->debug(
+            'Stored procedure {procedure} executed in {duration_ms} ms',
+            $context + ['duration_ms' => $this->elapsed($start)]
+        );
+
+        return $result;
+    }
+
+    /**
+     * Execute the prepared call, fetch its result, and close the cursor.
+     *
+     * @template T
+     * @param Call $call
+     * @param Closure(PDOStatement): T $fetch Fetches the result from the executed statement
+     * @return T
+     */
+    private function fetch(Call $call, Closure $fetch): mixed
+    {
+        try {
             $call->statement->execute();
-            $result = $fetch($call->statement);
+
+            return $fetch($call->statement);
         } finally {
             $call->statement->closeCursor();
         }
+    }
 
-        return [$result, $call];
+    /**
+     * @param array<string, mixed> $context
+     */
+    private function logFailure(StoredProcedureException $exception, array $context, int|float $start): StoredProcedureException
+    {
+        $context += ['message' => $exception->getMessage(), 'duration_ms' => $this->elapsed($start)];
+
+        if ($exception instanceof ExecutionException) {
+            $context['sql_state'] = $exception->getSqlState();
+        }
+
+        $this->logger?->log(
+            $exception instanceof ProcedureErrorException ? LogLevel::WARNING : LogLevel::ERROR,
+            'Stored procedure {procedure} failed: {message}',
+            $context + ['exception' => $exception]
+        );
+
+        return $exception;
+    }
+
+    private function elapsed(int|float $start): float
+    {
+        return round((hrtime(true) - $start) / 1e6, 2);
     }
 
     /**

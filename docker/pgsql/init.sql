@@ -148,3 +148,13 @@ LANGUAGE sql IMMUTABLE
 AS $$
     SELECT p_value;
 $$;
+
+-- 12. Raise a business error with RAISE EXCEPTION
+CREATE OR REPLACE FUNCTION fn_raise_error(p_message VARCHAR)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION '%', p_message;
+END;
+$$;

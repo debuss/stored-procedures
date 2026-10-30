@@ -117,3 +117,12 @@ BEGIN
     SELECT p_value AS value;
 END //
 DELIMITER ;
+
+-- 10. Raise a business error with SIGNAL
+DROP PROCEDURE IF EXISTS sp_raise_error;
+DELIMITER //
+CREATE PROCEDURE sp_raise_error(IN p_message VARCHAR(255))
+BEGIN
+    SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = p_message;
+END //
+DELIMITER ;

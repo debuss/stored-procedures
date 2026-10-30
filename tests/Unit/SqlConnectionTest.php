@@ -206,13 +206,18 @@ describe('query()', function () {
         $connection->query('sp_test', ['p_name' => 'France']);
     });
 
-    it('closes the cursor when execution fails', function () {
+    it('closes the cursor and converts the error when execution fails', function () {
         [$connection, $pdo, $driver, $stmt] = setupMocks();
 
-        $stmt->shouldReceive('execute')->once()->andThrow(new PDOException('boom'));
+        $error = new PDOException('boom');
+        $stmt->shouldReceive('execute')->once()->andThrow($error);
         $stmt->shouldReceive('closeCursor')->once();
+        $driver->shouldReceive('convertException')
+            ->once()
+            ->with('sp_test', $error)
+            ->andReturn(new StoredProcedures\Exception\ExecutionException('boom', 'sp_test', 'HY000'));
 
-        expect(fn() => $connection->query('sp_test'))->toThrow(PDOException::class, 'boom');
+        expect(fn() => $connection->query('sp_test'))->toThrow(StoredProcedures\Exception\ExecutionException::class, 'boom');
     });
 
     it('passes the fetched row sets to the output values reader', function () {
@@ -466,5 +471,76 @@ describe('queryScalar()', function () {
         $stmt->shouldReceive('closeCursor')->once();
 
         expect($connection->queryScalar('sp_count'))->toBeNull();
+    });
+});
+
+// ---------------------------------------------------------------
+//  Logging
+// ---------------------------------------------------------------
+
+describe('logging', function () {
+    beforeEach(function () {
+        [$this->connection, $pdo, $this->driver, $this->stmt] = setupMocks();
+        $this->logger = new Tests\Fixtures\ArrayLogger();
+        $this->connection->setLogger($this->logger);
+    });
+
+    it('logs each call at the debug level, with the parameter names but not their values', function () {
+        $this->stmt->shouldReceive('execute')->once();
+        $this->stmt->shouldReceive('closeCursor')->once();
+
+        $this->connection->query('sp_test', ['p_password' => 'secret', 'p_iso' => 'FR']);
+
+        expect($this->logger->records)->toHaveCount(1)
+            ->and($this->logger->records[0]['level'])->toBe(Psr\Log\LogLevel::DEBUG)
+            ->and($this->logger->records[0]['message'])->toBe('Stored procedure {procedure} executed in {duration_ms} ms')
+            ->and($this->logger->records[0]['context'])->toMatchArray(['procedure' => 'sp_test', 'parameters' => ['p_password', 'p_iso']])
+            ->and($this->logger->records[0]['context']['duration_ms'])->toBeFloat()
+            ->and(json_encode($this->logger->records))->not->toContain('secret');
+    });
+
+    it('logs the failures with their level, SQLSTATE and exception', function (StoredProcedures\Exception\ExecutionException $exception, string $level) {
+        $this->stmt->shouldReceive('execute')->once()->andThrow(new PDOException('boom'));
+        $this->stmt->shouldReceive('closeCursor')->once();
+        $this->driver->shouldReceive('convertException')->once()->andReturn($exception);
+
+        expect(fn() => $this->connection->execute('sp_test'))->toThrow($exception::class);
+
+        expect($this->logger->records)->toHaveCount(1)
+            ->and($this->logger->records[0]['level'])->toBe($level)
+            ->and($this->logger->records[0]['message'])->toBe('Stored procedure {procedure} failed: {message}')
+            ->and($this->logger->records[0]['context'])->toMatchArray(['procedure' => 'sp_test', 'message' => 'Failure', 'sql_state' => '45000', 'exception' => $exception]);
+    })->with([
+        'raised by the procedure' => [new StoredProcedures\Exception\ProcedureErrorException('Failure', 'sp_test', '45000'), Psr\Log\LogLevel::WARNING],
+        'other database error' => [new StoredProcedures\Exception\ExecutionException('Failure', 'sp_test', '45000'), Psr\Log\LogLevel::ERROR],
+    ]);
+
+    it('logs the validation errors at the error level', function () {
+        $this->driver->shouldReceive('prepare')->andThrow(new StoredProcedureException('Invalid stored procedure name'));
+
+        expect(fn() => $this->connection->query('sp test'))->toThrow(StoredProcedureException::class);
+
+        expect($this->logger->records[0]['level'])->toBe(Psr\Log\LogLevel::ERROR)
+            ->and($this->logger->records[0]['context'])->not->toHaveKey('sql_state');
+    });
+
+    it('does not log a call without rows as a failure', function () {
+        $this->stmt->shouldReceive('execute')->once();
+        $this->stmt->shouldReceive('fetch')->once()->andReturn(false);
+        $this->stmt->shouldReceive('closeCursor')->once();
+
+        expect(fn() => $this->connection->queryFirst('sp_test'))->toThrow(NoResultsException::class);
+
+        expect(array_column($this->logger->records, 'level'))->toBe([Psr\Log\LogLevel::DEBUG]);
+    });
+
+    it('accepts the logger in the constructor', function () {
+        $pdo = Mockery::mock(PDO::class);
+        $pdo->shouldReceive('getAttribute')->with(PDO::ATTR_ERRMODE)->andReturn(PDO::ERRMODE_EXCEPTION);
+        $pdo->shouldReceive('getAttribute')->with(PDO::ATTR_DRIVER_NAME)->andReturn('mysql');
+
+        $connection = new SqlConnection($pdo, $this->logger);
+
+        expect((new ReflectionProperty($connection, 'logger'))->getValue($connection))->toBe($this->logger);
     });
 });

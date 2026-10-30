@@ -1,7 +1,10 @@
 <?php
 
 use StoredProcedures\DbType;
+use StoredProcedures\Exception\ExecutionException;
 use StoredProcedures\Exception\NoResultsException;
+use StoredProcedures\Exception\ProcedureErrorException;
+use StoredProcedures\Exception\StoredProcedureException;
 use StoredProcedures\SqlConnection;
 use Tests\Fixtures\Country;
 use Tests\Fixtures\Iso;
@@ -148,4 +151,23 @@ it('round-trips a date parameter to a date property', function () {
         ->single(Moment::class);
 
     expect($moment->value->format('Y-m-d H:i:s'))->toBe('2026-10-30 12:34:56');
+});
+
+it('converts the errors raised by the procedure', function () {
+    try {
+        $this->connection->execute('fn_raise_error', ['p_message' => 'Country ZZ not found']);
+        $this->fail('No exception thrown');
+    } catch (ProcedureErrorException $e) {
+        expect($e->getMessage())->toBe('Country ZZ not found')
+            ->and($e->getProcedure())->toBe('fn_raise_error')
+            ->and($e->getSqlState())->toBe('P0001')
+            ->and($e->getDriverCode())->toBe(null);
+    }
+});
+
+it('converts the other database errors', function () {
+    expect(fn() => $this->connection->execute('fn_does_not_exist'))
+        ->toThrow(fn(ExecutionException $e) => expect($e)->not->toBeInstanceOf(ProcedureErrorException::class)
+            ->and($e->getSqlState())->toBe('42883')
+            ->and($e->getMessage())->toContain('function fn_does_not_exist() does not exist'));
 });
