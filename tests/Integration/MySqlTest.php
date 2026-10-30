@@ -159,3 +159,11 @@ it('rejects a timeout, MySQL being unable to limit a stored procedure', function
     expect(fn() => $this->connection->withTimeout(5)->query('sp_fetch_all_countries'))
         ->toThrow(StoredProcedureException::class, 'MySQL cannot limit the execution time of a stored procedure');
 });
+
+it('decodes a JSON column to an array', function () {
+    $summary = $this->connection->querySingle('sp_fetch_countries_summary', [], Tests\Fixtures\CountrySummary::class);
+
+    expect($summary->total)->toBeGreaterThanOrEqual(10)
+        ->and($summary->isos)->toHaveCount($summary->total)
+        ->and($summary->isos)->toContain('FR', 'DE');
+});

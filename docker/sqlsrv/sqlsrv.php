@@ -1,6 +1,11 @@
 <?php
 
 use StoredProcedures\DbType;
+use StoredProcedures\Exception\ExecutionException;
+use StoredProcedures\Exception\ProcedureErrorException;
+use StoredProcedures\Exception\StoredProcedureException;
+use StoredProcedures\Exception\TimeoutException;
+use StoredProcedures\Hydrator;
 use StoredProcedures\ParameterMode;
 use StoredProcedures\SqlConnection;
 use StoredProcedures\SqlParameter;
@@ -212,3 +217,109 @@ echo "  Total: " . $connection->queryScalar('sp_count_countries') . PHP_EOL;
 
 $pdo->rollBack();
 echo PHP_EOL . "Transaction rolled back: the database is unchanged." . PHP_EOL;
+
+// The following calls only read the database: they run outside the transaction
+
+// ---------------------------------------------------------------
+//  16. Error raised by the procedure — ProcedureErrorException
+// ---------------------------------------------------------------
+echo PHP_EOL . "=== Error raised by the procedure (THROW) ===" . PHP_EOL;
+
+try {
+    $connection->execute('sp_raise_error', ['p_message' => 'Country ZZ not found']);
+} catch (ProcedureErrorException $e) {
+    echo "  {$e->getMessage()} (procedure: {$e->getProcedure()}, SQLSTATE: {$e->getSqlState()}, code: {$e->getDriverCode()})" . PHP_EOL;
+}
+
+// ---------------------------------------------------------------
+//  17. Other database error — ExecutionException
+// ---------------------------------------------------------------
+echo PHP_EOL . "=== Unknown procedure ===" . PHP_EOL;
+
+try {
+    $connection->execute('sp_does_not_exist');
+} catch (ExecutionException $e) {
+    echo "  {$e->getMessage()} (SQLSTATE: {$e->getSqlState()}, code: {$e->getDriverCode()})" . PHP_EOL;
+}
+
+// ---------------------------------------------------------------
+//  18. Parameters matched by name — any order, typos reported,
+//      default values for the parameters not given
+// ---------------------------------------------------------------
+echo PHP_EOL . "=== Parameters matched by name ===" . PHP_EOL;
+
+$by_name = new SqlConnection($pdo, match_parameters_by_name: true);
+
+$result = $by_name
+    ->procedure('sp_search_and_return_country')
+    ->inout('p_name', '', DbType::STRING, 100)
+    ->input('p_iso', 'FR')
+    ->execute();
+
+echo "  Country name (parameters in any order): " . $result->getOutputValue('p_name') . PHP_EOL;
+
+try {
+    $by_name->query('sp_fetch_country_by_iso', ['p_isoo' => 'FR']);
+} catch (StoredProcedureException $e) {
+    echo "  {$e->getMessage()}" . PHP_EOL;
+}
+
+// @p_limit is omitted: it keeps its default value
+$countries = $by_name->query('sp_fetch_countries_page', ['p_offset' => 1, 'p_letter' => 'N'], Country::class);
+
+foreach ($countries as $country) {
+    echo "  Second country starting with 'N': [{$country->iso}] {$country->name}" . PHP_EOL;
+}
+
+// ---------------------------------------------------------------
+//  19. #[Column] attribute, type handler and Stringable parameter
+// ---------------------------------------------------------------
+echo PHP_EOL . "=== #[Column] and type handler ===" . PHP_EOL;
+
+Hydrator::addTypeHandler(IsoCode::class, fn(string $value): IsoCode => new IsoCode($value));
+
+$view = $connection
+    ->procedure('sp_fetch_country_by_iso')
+    ->input('p_iso', new IsoCode('IT'))
+    ->single(CountryView::class);
+
+echo "  " . $view->code::class . "({$view->code}) — {$view->label}" . PHP_EOL;
+
+// ---------------------------------------------------------------
+//  20. JSON column decoded to an array
+// ---------------------------------------------------------------
+echo PHP_EOL . "=== JSON column ===" . PHP_EOL;
+
+$summary = $connection->querySingle('sp_fetch_countries_summary', [], CountrySummary::class);
+
+echo "  {$summary->total} countries: " . implode(', ', $summary->isos) . PHP_EOL;
+
+// ---------------------------------------------------------------
+//  21. PSR-3 logging — parameter names are logged, never their values
+// ---------------------------------------------------------------
+echo PHP_EOL . "=== Logging ===" . PHP_EOL;
+
+$logged = new SqlConnection($pdo, new EchoLogger());
+
+$logged->queryScalar('sp_count_countries');
+
+try {
+    $logged->execute('sp_raise_error', ['p_message' => 'Country ZZ not found']);
+} catch (ProcedureErrorException) {
+    // Logged as a warning
+}
+
+// ---------------------------------------------------------------
+//  22. Timeouts — the 3 seconds call is canceled after 1 second
+// ---------------------------------------------------------------
+echo PHP_EOL . "=== Timeout ===" . PHP_EOL;
+
+$start = microtime(true);
+
+try {
+    $connection->procedure('sp_sleep')->timeout(1)->input('p_seconds', 3)->execute();
+} catch (TimeoutException $e) {
+    printf("  Canceled after %.1f s: %s" . PHP_EOL, microtime(true) - $start, $e->getMessage());
+}
+
+echo "  Within the timeout: slept " . $connection->withTimeout(5)->procedure('sp_sleep')->input('p_seconds', 1)->scalar() . " s" . PHP_EOL;

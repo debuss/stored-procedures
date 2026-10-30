@@ -169,3 +169,11 @@ BEGIN
     RETURN p_seconds;
 END;
 $$;
+
+-- 14. Summary with a JSON column
+CREATE OR REPLACE FUNCTION fn_fetch_countries_summary()
+RETURNS TABLE (total BIGINT, isos JSON)
+LANGUAGE sql STABLE
+AS $$
+    SELECT COUNT(*), json_agg(iso ORDER BY iso) FROM countries;
+$$;

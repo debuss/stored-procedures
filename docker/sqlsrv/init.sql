@@ -188,3 +188,14 @@ BEGIN
     SELECT @p_seconds AS slept;
 END;
 GO
+
+-- 13. Summary with a JSON column
+IF OBJECT_ID('sp_fetch_countries_summary', 'P') IS NOT NULL DROP PROCEDURE sp_fetch_countries_summary;
+GO
+CREATE PROCEDURE sp_fetch_countries_summary
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT COUNT(*) AS total, '[' + STRING_AGG('"' + iso + '"', ',') WITHIN GROUP (ORDER BY iso) + ']' AS isos FROM countries;
+END;
+GO

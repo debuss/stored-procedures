@@ -135,3 +135,12 @@ BEGIN
     SELECT SLEEP(p_seconds) AS slept;
 END //
 DELIMITER ;
+
+-- 12. Summary with a JSON column
+DROP PROCEDURE IF EXISTS sp_fetch_countries_summary;
+DELIMITER //
+CREATE PROCEDURE sp_fetch_countries_summary()
+BEGIN
+    SELECT COUNT(*) AS total, JSON_ARRAYAGG(iso) AS isos FROM countries;
+END //
+DELIMITER ;

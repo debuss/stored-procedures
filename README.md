@@ -437,7 +437,7 @@ php docker/pgsql/pgsql.php
 php docker/sqlsrv/sqlsrv.php
 ```
 
-The demo scripts map the rows to the `Country` class of `docker/models.php`, and run in a transaction rolled back at the end: they leave the database unchanged and can be run again.
+The demo scripts map the rows to the classes of `docker/models.php`. The calls modifying data run in a transaction rolled back at the end, so the scripts leave the database unchanged and can be run again; the calls showing the errors, the logging and the timeouts follow, outside the transaction.
 
 ## License
 
