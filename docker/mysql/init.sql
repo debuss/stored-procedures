@@ -126,3 +126,12 @@ BEGIN
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = p_message;
 END //
 DELIMITER ;
+
+-- 11. Wait for a number of seconds (timeouts)
+DROP PROCEDURE IF EXISTS sp_sleep;
+DELIMITER //
+CREATE PROCEDURE sp_sleep(IN p_seconds INT)
+BEGIN
+    SELECT SLEEP(p_seconds) AS slept;
+END //
+DELIMITER ;

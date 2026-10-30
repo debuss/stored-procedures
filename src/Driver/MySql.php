@@ -13,6 +13,9 @@ use StoredProcedures\SqlParameter;
  * MySQL has no named notation for CALL: parameters are passed in the order they are declared,
  * unless they are matched by name, using the parameters declared in INFORMATION_SCHEMA.
  * MySQL has no default parameter values: every declared parameter must then be given.
+ *
+ * MySQL cannot limit the execution time of a stored procedure: max_execution_time only
+ * applies to SELECT statements, so a timeout is rejected.
  */
 class MySql extends AbstractDriver
 {
@@ -50,8 +53,14 @@ class MySql extends AbstractDriver
      * @inheritDoc
      * @throws StoredProcedureException
      */
-    public function prepare(string $stored_procedure, array $parameters): Call
+    public function prepare(string $stored_procedure, array $parameters, ?int $timeout = null): Call
     {
+        if ($timeout !== null) {
+            throw new StoredProcedureException(
+                'MySQL cannot limit the execution time of a stored procedure: max_execution_time only applies to SELECT statements.'
+            );
+        }
+
         if ($this->match_parameters_by_name) {
             $parameters = $this->requireAll($stored_procedure, $this->orderByDeclaration($stored_procedure, $parameters));
         }

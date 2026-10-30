@@ -3,6 +3,7 @@
 namespace StoredProcedures\Driver;
 
 use PDO;
+use PDOException;
 use PDOStatement;
 use StoredProcedures\Exception\StoredProcedureException;
 use StoredProcedures\ParameterMode;
@@ -20,6 +21,8 @@ use StoredProcedures\SqlParameter;
  *
  * PostgreSQL returns OUT and INOUT values as columns of the result row: they are available
  * both in the rows and as output values.
+ *
+ * Timeouts set the statement_timeout setting during the call (two more queries), then restore it.
  */
 class PgSql extends AbstractDriver
 {
@@ -66,7 +69,7 @@ class PgSql extends AbstractDriver
      * @inheritDoc
      * @throws StoredProcedureException
      */
-    public function prepare(string $stored_procedure, array $parameters): Call
+    public function prepare(string $stored_procedure, array $parameters, ?int $timeout = null): Call
     {
         $statement = $this->pdo->prepare($this->getQuerySyntax($stored_procedure, $parameters));
 
@@ -80,7 +83,52 @@ class PgSql extends AbstractDriver
 
         $outputs = $this->outputParameters($parameters);
 
-        return new Call($statement, fn(array $row_sets): array => $this->readOutputColumns($outputs, $row_sets));
+        return new Call(
+            $statement,
+            fn(array $row_sets): array => $this->readOutputColumns($outputs, $row_sets),
+            $timeout === null ? null : function (PDOStatement $statement) use ($timeout): void {
+                $this->executeWithTimeout($statement, $timeout);
+            }
+        );
+    }
+
+    /**
+     * Execute the statement with the statement_timeout setting, then restore its previous value.
+     *
+     * Within a transaction, the setting is local to the transaction: when the statement fails,
+     * the transaction is aborted and its rollback restores the setting.
+     */
+    private function executeWithTimeout(PDOStatement $statement, int $timeout): void
+    {
+        $local = $this->pdo->inTransaction();
+        $previous = $this->setStatementTimeout("{$timeout}s", $local);
+
+        try {
+            $statement->execute();
+        } catch (PDOException $e) {
+            if (!$local) {
+                $this->setStatementTimeout($previous, false);
+            }
+
+            throw $e;
+        }
+
+        $this->setStatementTimeout($previous, $local);
+    }
+
+    /**
+     * @return string The previous value
+     */
+    private function setStatementTimeout(string $value, bool $local): string
+    {
+        $statement = $this->pdo->prepare(
+            "SELECT current_setting('statement_timeout'), set_config('statement_timeout', ?, " . ($local ? 'true' : 'false') . ')'
+        );
+        $statement->execute([$value]);
+        $previous = $statement->fetchColumn();
+        $statement->closeCursor();
+
+        return is_string($previous) ? $previous : '0';
     }
 
     /**
@@ -129,6 +177,14 @@ class PgSql extends AbstractDriver
         }
 
         return $outputs;
+    }
+
+    /**
+     * "canceling statement due to statement timeout" (query_canceled).
+     */
+    protected function isTimeout(string $sql_state, ?int $code): bool
+    {
+        return $sql_state === '57014';
     }
 
     /**

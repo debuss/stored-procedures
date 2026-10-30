@@ -5,6 +5,7 @@
 ### Breaking changes
 
 - The errors reported by the database are thrown as `ExecutionException` (a `StoredProcedureException`) instead of `PDOException`. The `PDOException` is available with `getPrevious()`.
+- `DriverInterface::prepare()` takes the timeout as third argument.
 - `psr/log` is required.
 
 ### Added
@@ -12,6 +13,11 @@
 - `ExecutionException`, with the procedure name, the SQLSTATE, the database error code and a message without the driver prefixes, and its subclass `ProcedureErrorException` for the errors raised on purpose by the procedure (`SIGNAL`, `RAISE EXCEPTION`, `THROW`/`RAISERROR`).
 - `match_parameters_by_name` option: on MySQL and SQL Server, the parameters are matched by name to the ones declared in `INFORMATION_SCHEMA` (unknown names are rejected; SQL Server uses the default value of the parameters not given).
 - PSR-3 logging of the calls (`debug`) and failures (`warning`/`error`), with the parameter names but not their values.
+- Timeouts: `SqlConnection::withTimeout()` and `Procedure::timeout()`, in seconds, throwing a `TimeoutException` (SQL Server and PostgreSQL; rejected by MySQL, which cannot limit a stored procedure).
+- `#[Column]` attribute, to map a parameter or property to a column with another name.
+- `Hydrator::addTypeHandler()`, to convert the column values to a type for every class (like Dapper's type handlers).
+- JSON columns are decoded for the parameters and properties of type `array`.
+- `Stringable` objects are bound as their string.
 
 ## [0.2.0] - 2026-10-30
 

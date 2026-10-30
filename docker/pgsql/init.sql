@@ -158,3 +158,14 @@ BEGIN
     RAISE EXCEPTION '%', p_message;
 END;
 $$;
+
+-- 13. Wait for a number of seconds (timeouts)
+CREATE OR REPLACE FUNCTION fn_sleep(p_seconds INTEGER)
+RETURNS INTEGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM pg_sleep(p_seconds);
+    RETURN p_seconds;
+END;
+$$;

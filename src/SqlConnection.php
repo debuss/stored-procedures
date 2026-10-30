@@ -19,6 +19,11 @@ class SqlConnection implements LoggerAwareInterface
     protected DriverInterface $driver;
 
     /**
+     * The maximum duration of the calls in seconds, or null for none.
+     */
+    protected ?int $timeout = null;
+
+    /**
      * @param PDO $pdo
      * @param LoggerInterface|null $logger Logs each call (debug) and each failure (warning for the errors raised by
      *                                     the procedure, error otherwise), with the parameter names but not their values
@@ -61,6 +66,35 @@ class SqlConnection implements LoggerAwareInterface
     public function setLogger(LoggerInterface $logger): void
     {
         $this->logger = $logger;
+    }
+
+    /**
+     * Get a copy of the connection limiting the duration of the calls, like CommandTimeout in .NET.
+     *
+     * A call taking longer throws a TimeoutException. Supported by SQL Server (pdo_sqlsrv) and
+     * PostgreSQL; MySQL cannot limit the execution time of a stored procedure.
+     *
+     * @param int|null $seconds The maximum duration of a call, or null for none
+     * @throws StoredProcedureException When the timeout is not a positive number of seconds
+     */
+    public function withTimeout(?int $seconds): static
+    {
+        if ($seconds !== null && $seconds <= 0) {
+            throw new StoredProcedureException("The timeout must be a positive number of seconds, got $seconds.");
+        }
+
+        $connection = clone $this;
+        $connection->timeout = $seconds;
+
+        return $connection;
+    }
+
+    /**
+     * Get the maximum duration of the calls in seconds, or null for none.
+     */
+    public function getTimeout(): ?int
+    {
+        return $this->timeout;
     }
 
     public function procedure(string $stored_procedure): Procedure
@@ -255,11 +289,11 @@ class SqlConnection implements LoggerAwareInterface
         $context = [
             'procedure' => $stored_procedure,
             'parameters' => array_map(fn(SqlParameter $parameter): string => $parameter->name, $parameters),
-        ];
+        ] + ($this->timeout === null ? [] : ['timeout' => $this->timeout]);
         $start = hrtime(true);
 
         try {
-            $result = $operation($this->driver->prepare($stored_procedure, $parameters));
+            $result = $operation($this->driver->prepare($stored_procedure, $parameters, $this->timeout));
         } catch (PDOException $e) {
             throw $this->logFailure($this->driver->convertException($stored_procedure, $e), $context, $start);
         } catch (StoredProcedureException $e) {
@@ -285,7 +319,7 @@ class SqlConnection implements LoggerAwareInterface
     private function fetch(Call $call, Closure $fetch): mixed
     {
         try {
-            $call->statement->execute();
+            $call->execute();
 
             return $fetch($call->statement);
         } finally {

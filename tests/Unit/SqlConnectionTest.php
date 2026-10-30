@@ -198,7 +198,7 @@ describe('query()', function () {
 
         $driver->shouldReceive('prepare')
             ->once()
-            ->with('sp_test', Mockery::on(fn(array $params): bool => $params == [new SqlParameter('p_name', 'France', DbType::STRING)]))
+            ->with('sp_test', Mockery::on(fn(array $params): bool => $params == [new SqlParameter('p_name', 'France', DbType::STRING)]), null)
             ->andReturn(new Call($stmt, fn(): array => []));
         $stmt->shouldReceive('execute')->once();
         $stmt->shouldReceive('closeCursor')->once();

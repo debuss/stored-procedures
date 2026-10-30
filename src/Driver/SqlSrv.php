@@ -14,6 +14,8 @@ use StoredProcedures\SqlParameter;
  * EXEC with named OUTPUT arguments when they are bound as output parameters.
  * When they are matched by name, they are ordered with the parameters declared in
  * INFORMATION_SCHEMA, and the parameters not given use their default value.
+ *
+ * Timeouts use the PDO::SQLSRV_ATTR_QUERY_TIMEOUT statement attribute, so they require pdo_sqlsrv.
  */
 class SqlSrv extends AbstractDriver
 {
@@ -61,7 +63,7 @@ class SqlSrv extends AbstractDriver
      * @inheritDoc
      * @throws StoredProcedureException
      */
-    public function prepare(string $stored_procedure, array $parameters): Call
+    public function prepare(string $stored_procedure, array $parameters, ?int $timeout = null): Call
     {
         if ($this->match_parameters_by_name) {
             $parameters = $this->orderByDeclaration($stored_procedure, $parameters);
@@ -72,7 +74,10 @@ class SqlSrv extends AbstractDriver
             }
         }
 
-        $statement = $this->pdo->prepare($this->getQuerySyntax($stored_procedure, $parameters));
+        $sql = $this->getQuerySyntax($stored_procedure, $parameters);
+        $statement = $timeout === null
+            ? $this->pdo->prepare($sql)
+            : $this->pdo->prepare($sql, $this->timeoutOptions($timeout));
         $outputs = [];
 
         foreach (array_filter($parameters) as $parameter) {
@@ -130,6 +135,28 @@ class SqlSrv extends AbstractDriver
             fn(string $name): string => ltrim($name, '@'),
             array_values(array_filter($names, 'is_string'))
         );
+    }
+
+    /**
+     * @return array<int, int>
+     * @throws StoredProcedureException With pdo_dblib, which has no statement timeout
+     */
+    private function timeoutOptions(int $timeout): array
+    {
+        if ($this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'sqlsrv') {
+            throw new StoredProcedureException('SQL Server timeouts require the pdo_sqlsrv driver.');
+        }
+
+        // The constant is only defined when pdo_sqlsrv is loaded
+        return [(int) constant('PDO::SQLSRV_ATTR_QUERY_TIMEOUT') => $timeout];
+    }
+
+    /**
+     * "Query timeout expired".
+     */
+    protected function isTimeout(string $sql_state, ?int $code): bool
+    {
+        return $sql_state === 'HYT00';
     }
 
     /**

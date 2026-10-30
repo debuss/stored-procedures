@@ -119,9 +119,34 @@ Mapping rules:
 - Scalar values are coerced to the declared types (`"42"` → `int`), string values are converted to **backed enums** (`from()`) and to **`DateTimeInterface`** implementations (`DateTimeInterface` itself gives a `DateTimeImmutable`).
 - Extra columns are ignored. A missing column keeps the default value of an optional parameter, and throws a `MappingException` for a required one.
 - A class without constructor parameters gets its public, non-readonly properties assigned instead.
+- A string value is decoded from **JSON** for a parameter or property of type `array`.
+- Another column name can be given with the `#[Column]` attribute.
 - With multiple row sets, the class applies to all of them; override it per row set with `$result->rowSet(1, Order::class)`.
 
 The return types are generic: PHPStan and your IDE know that `query(..., Country::class)->rows()` is a `list<Country>`.
+
+#### Column names and custom types
+
+```php
+use StoredProcedures\Attribute\Column;
+use StoredProcedures\Hydrator;
+
+final readonly class Product
+{
+    public function __construct(
+        #[Column('product_code')] public Sku $sku,     // column `product_code`, converted by the type handler below
+        #[Column('lbl')] public string $name,
+        public array $tags = [],                       // JSON column, e.g. '["usb","azerty"]'
+    ) {}
+}
+
+// Register once, for every class: like SqlMapper.AddTypeHandler() in Dapper
+Hydrator::addTypeHandler(Sku::class, fn(string $value): Sku => Sku::fromString($value));
+```
+
+A type handler receives the column value (never `null`), and replaces the built-in conversions for its type: it can also be registered for a built-in type, e.g. `Hydrator::addTypeHandler('bool', fn($value) => $value === 't')`. Its exceptions are wrapped in a `MappingException`.
+
+In the other direction, `Stringable` objects (UUID, money…) passed as parameters are bound as their string.
 
 ### Scalar Values
 
@@ -129,6 +154,25 @@ The return types are generic: PHPStan and your IDE know that `query(..., Country
 $total = $connection->queryScalar('sp_count_countries');        // first column of the first row, or null
 $total = $connection->procedure('sp_count_countries')->scalar();
 ```
+
+### Timeouts
+
+Limit the duration of the calls, like `CommandTimeout` in .NET (in seconds). A call taking longer throws a `TimeoutException`:
+
+```php
+$connection = $connection->withTimeout(30);   // for every call (an immutable copy of the connection)
+
+$rows = $connection
+    ->procedure('sp_monthly_report')
+    ->timeout(120)                            // for this call only, or ->timeout(null) for none
+    ->all();
+```
+
+| Database | Mechanism |
+|----------|-----------|
+| **SQL Server** | `PDO::SQLSRV_ATTR_QUERY_TIMEOUT` statement attribute (pdo_sqlsrv only, not pdo_dblib) |
+| **PostgreSQL** | `statement_timeout`, set before the call and restored after (two more queries); local to the transaction within one |
+| **MySQL** | Not supported: `max_execution_time` only applies to `SELECT` statements, so a timeout throws a `StoredProcedureException` |
 
 ### Executing (INSERT / UPDATE / DELETE)
 
@@ -335,7 +379,7 @@ $connection = new SqlConnection($pdo, $logger);
 
 | Event | Level | Context |
 |-------|-------|---------|
-| Successful call | `debug` | `procedure`, `parameters`, `duration_ms` |
+| Successful call | `debug` | `procedure`, `parameters`, `duration_ms`, and `timeout` when set |
 | Error raised by the procedure (`ProcedureErrorException`) | `warning` | + `message`, `sql_state`, `exception` |
 | Other failure | `error` | + `message`, `sql_state`, `exception` |
 
@@ -350,6 +394,7 @@ All exceptions extend `StoredProcedureException` for easy catch-all handling:
 | `StoredProcedureException` | Base class — invalid procedure/parameter names, numeric array keys, unknown parameter names, etc. |
 | `ExecutionException` | The database reports an error during the call |
 | `ProcedureErrorException` | The procedure raises an error on purpose (subclass of `ExecutionException`) |
+| `TimeoutException` | The call takes longer than the timeout (subclass of `ExecutionException`) |
 | `NoResultsException` | `queryFirst()` or `querySingle()` returns zero rows |
 | `MultipleResultsException` | `querySingle()` returns more than one row |
 | `MappingException` | A row cannot be mapped to the requested class |

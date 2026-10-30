@@ -16,10 +16,11 @@ interface DriverInterface
      *
      * @param string $stored_procedure
      * @param SqlParameter[] $parameters
+     * @param int|null $timeout The maximum duration of the call in seconds, or null for none
      * @return Call
-     * @throws StoredProcedureException
+     * @throws StoredProcedureException When the database cannot apply the timeout
      */
-    public function prepare(string $stored_procedure, array $parameters): Call;
+    public function prepare(string $stored_procedure, array $parameters, ?int $timeout = null): Call;
 
     /**
      * Fetch all row sets from an executed statement.
@@ -37,7 +38,8 @@ interface DriverInterface
      *
      * @param string $stored_procedure
      * @param PDOException $exception
-     * @return ExecutionException A ProcedureErrorException when the procedure raised the error on purpose
+     * @return ExecutionException A TimeoutException when the call took longer than the timeout,
+     *                             a ProcedureErrorException when the procedure raised the error on purpose
      */
     public function convertException(string $stored_procedure, PDOException $exception): ExecutionException;
 
