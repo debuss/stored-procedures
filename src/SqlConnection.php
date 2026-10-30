@@ -2,10 +2,11 @@
 
 namespace StoredProcedures;
 
+use Closure;
 use PDO;
 use PDOStatement;
 use stdClass;
-use StoredProcedures\Driver\{DriverInterface, MySql, PgSql, SqlSrv};
+use StoredProcedures\Driver\{Call, DriverInterface, MySql, PgSql, SqlSrv};
 use StoredProcedures\Exception\{MultipleResultsException, NoResultsException, StoredProcedureException, UnsupportedDriverException};
 
 class SqlConnection
@@ -22,9 +23,9 @@ class SqlConnection
         $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
 
         $this->driver = match ($driver) {
-            'mysql' => new MySql(),
+            'mysql' => new MySql($this->pdo),
             'pgsql' => new PgSql($this->pdo),
-            'sqlsrv', 'dblib' => new SqlSrv(),
+            'sqlsrv', 'dblib' => new SqlSrv($this->pdo),
             default => throw new UnsupportedDriverException("Unsupported database driver: $driver"),
         };
     }
@@ -45,7 +46,10 @@ class SqlConnection
     }
 
     /**
-     * Execute a stored procedure with the provided parameters.
+     * Execute a stored procedure (INSERT/UPDATE/DELETE) with the provided parameters.
+     *
+     * Same as {@see query()}: the name tells the intent, read the affected rows
+     * and output values from the result set.
      *
      * @param string $stored_procedure
      * @param array<string, mixed>|SqlParameter[] $parameters
@@ -54,25 +58,12 @@ class SqlConnection
      */
     public function execute(string $stored_procedure, array $parameters = []): ResultSet
     {
-        $parameters = $this->normalizeParameters($parameters);
-        $statement = $this->getStatement($stored_procedure, $parameters);
-
-        try {
-            $statement->execute();
-            $affectedRows = $statement->rowCount();
-        } finally {
-            $statement->closeCursor();
-        }
-
-        return new ResultSet(
-            [],
-            $this->driver->getOutputValues($parameters, $this->pdo),
-            $affectedRows
-        );
+        return $this->query($stored_procedure, $parameters);
     }
 
     /**
-     * Execute a stored procedure with the provided parameters and return the result set.
+     * Execute a stored procedure with the provided parameters and return the result set,
+     * with its row sets, output values and affected rows.
      *
      * @param string $stored_procedure
      * @param array<string, mixed>|SqlParameter[] $parameters
@@ -81,20 +72,14 @@ class SqlConnection
      */
     public function query(string $stored_procedure, array $parameters = []): ResultSet
     {
-        $parameters = $this->normalizeParameters($parameters);
-        $statement = $this->getStatement($stored_procedure, $parameters);
-
-        try {
-            $statement->execute();
-            $row_sets = $this->driver->fetchRowSets($statement);
-        } finally {
-            $statement->closeCursor();
-        }
-
-        return new ResultSet(
-            $row_sets,
-            $this->driver->getOutputValues($parameters, $this->pdo)
+        // The affected rows must be read before the row sets are fetched
+        [[$affected_rows, $row_sets], $call] = $this->run(
+            $stored_procedure,
+            $parameters,
+            fn(PDOStatement $statement): array => [$statement->rowCount(), $this->driver->fetchRowSets($statement)]
         );
+
+        return new ResultSet($row_sets, $call->getOutputValues($row_sets), $affected_rows);
     }
 
     /**
@@ -109,21 +94,13 @@ class SqlConnection
      */
     public function queryFirst(string $stored_procedure, array $parameters = []): array|stdClass
     {
-        $parameters = $this->normalizeParameters($parameters);
-        $statement = $this->getStatement($stored_procedure, $parameters);
+        [$row] = $this->run($stored_procedure, $parameters, fn(PDOStatement $statement): mixed => $statement->fetch());
 
-        try {
-            $statement->execute();
-            $result = $statement->fetch();
-        } finally {
-            $statement->closeCursor();
-        }
-
-        if ($result === false) {
+        if ($row === false) {
             throw new NoResultsException("No results found for '$stored_procedure'.");
         }
 
-        return $result;
+        return $row;
     }
 
     /**
@@ -157,16 +134,12 @@ class SqlConnection
      */
     public function querySingle(string $stored_procedure, array $parameters = []): array|stdClass
     {
-        $parameters = $this->normalizeParameters($parameters);
-        $statement = $this->getStatement($stored_procedure, $parameters);
-
-        try {
-            $statement->execute();
-            $first = $statement->fetch();
-            $second = $first === false ? false : $statement->fetch();
-        } finally {
-            $statement->closeCursor();
-        }
+        // pdo_sqlsrv throws when fetching past the end of the result set
+        [[$first, $second]] = $this->run(
+            $stored_procedure,
+            $parameters,
+            fn(PDOStatement $statement): array => ($row = $statement->fetch()) === false ? [false, false] : [$row, $statement->fetch()]
+        );
 
         if ($first === false) {
             throw new NoResultsException("No results found for '$stored_procedure'.");
@@ -198,6 +171,30 @@ class SqlConnection
     }
 
     /**
+     * Prepare and execute a stored procedure, fetch its result, and close the cursor.
+     *
+     * @template T
+     * @param string $stored_procedure
+     * @param array<string, mixed>|SqlParameter[] $parameters
+     * @param Closure(PDOStatement): T $fetch Fetches the result from the executed statement
+     * @return array{T, Call} The fetched result, and the call to read the output values from
+     * @throws StoredProcedureException
+     */
+    private function run(string $stored_procedure, array $parameters, Closure $fetch): array
+    {
+        $call = $this->driver->prepare($stored_procedure, $this->normalizeParameters($parameters));
+
+        try {
+            $call->statement->execute();
+            $result = $fetch($call->statement);
+        } finally {
+            $call->statement->closeCursor();
+        }
+
+        return [$result, $call];
+    }
+
+    /**
      * Convert parameters to SqlParameter instances if they are not already.
      *
      * Accepts either an array of SqlParameter objects or a named associative array
@@ -209,9 +206,12 @@ class SqlConnection
      */
     private function normalizeParameters(array $parameters): array
     {
-        array_walk($parameters, function (&$value, $key) {
+        $normalized = [];
+
+        foreach ($parameters as $key => $value) {
             if ($value instanceof SqlParameter) {
-                return;
+                $normalized[] = $value;
+                continue;
             }
 
             if (!is_string($key)) {
@@ -220,32 +220,9 @@ class SqlConnection
                 );
             }
 
-            $value = SqlParameter::from($key, $value);
-        });
+            $normalized[] = SqlParameter::from($key, $value);
+        }
 
-        return array_values($parameters);
-    }
-
-    /**
-     * Create a PDOStatement for the given stored procedure and parameters, caching it for future use.
-     *
-     * @param string $stored_procedure
-     * @param array<string, mixed>|SqlParameter[] $parameters
-     * @return PDOStatement
-     * @throws StoredProcedureException
-     */
-    private function getStatement(string $stored_procedure, array $parameters = []): PDOStatement
-    {
-        $statement = $this->pdo->prepare(
-            $this->driver->getQuerySyntax($stored_procedure, $parameters)
-        );
-
-        $this->driver->bindParameters(
-            $statement,
-            $parameters,
-            $this->pdo
-        );
-
-        return $statement;
+        return $normalized;
     }
 }

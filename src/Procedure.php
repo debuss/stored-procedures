@@ -52,11 +52,9 @@ class Procedure
      *
      * @throws StoredProcedureException
      */
-    public function execute(): int
+    public function execute(): ResultSet
     {
-        return $this->connection
-            ->execute($this->stored_procedure, $this->parameters)
-            ->getAffectedRows();
+        return $this->connection->execute($this->stored_procedure, $this->parameters);
     }
 
     /**

@@ -60,3 +60,14 @@ it('reads an INOUT parameter', function () {
 
     expect($result->getOutputValue('p_name'))->toBe('France');
 });
+
+it('returns OUT parameters from execute()', function () {
+    $result = $this->connection
+        ->procedure('sp_insert_and_return_country')
+        ->input('p_iso', 'LU')
+        ->input('p_name', 'Luxembourg')
+        ->output('p_country_id', DbType::INTEGER)
+        ->execute();
+
+    expect((int) $result->getOutputValue('p_country_id'))->toBeGreaterThan(10);
+});

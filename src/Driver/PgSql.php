@@ -12,15 +12,16 @@ use StoredProcedures\SqlParameter;
  * PostgreSQL driver for stored functions and procedures.
  *
  * Functions are called with `SELECT * FROM function_name(...)`, procedures with
- * `CALL procedure_name(...)`. The routine kind is looked up in `pg_proc` (when a
- * PDO instance is available) and cached per name.
+ * `CALL procedure_name(...)`. The routine kind is looked up in `pg_proc` and cached per name.
  *
- * In PostgreSQL, OUT and INOUT values are returned as columns of a single result
- * row — read them from the result set rows. INOUT parameters are passed in the call
- * like IN parameters. OUT parameters are omitted for functions and passed as NULL
- * for procedures, as PostgreSQL requires.
+ * Parameters use the named notation (`p_name => :p_name`), so they are matched by name
+ * and their order does not matter. OUT parameters are omitted for functions and passed
+ * as NULL for procedures, as PostgreSQL requires.
+ *
+ * PostgreSQL returns OUT and INOUT values as columns of the result row: they are available
+ * both in the rows and as output values.
  */
-class PgSql extends AbstractDriver implements DriverInterface
+class PgSql extends AbstractDriver
 {
 
     /**
@@ -31,17 +32,9 @@ class PgSql extends AbstractDriver implements DriverInterface
     private array $procedures = [];
 
     /**
-     * @param PDO|null $pdo Used to detect whether a routine is a procedure. Without it, every routine is called as a function.
-     */
-    public function __construct(
-        private readonly ?PDO $pdo = null
-    ) {}
-
-    /**
      * Build the CALL (procedure) or SELECT * FROM (function) syntax for PostgreSQL.
      *
      * @inheritDoc
-     * @throws StoredProcedureException
      */
     public function getQuerySyntax(string $stored_procedure, array $parameters = []): string
     {
@@ -49,47 +42,45 @@ class PgSql extends AbstractDriver implements DriverInterface
         $this->assertValidParameterNames($parameters);
 
         if ($this->isProcedure($stored_procedure)) {
-            $placeholders = array_map(
-                fn(SqlParameter $param): string => $param->mode === ParameterMode::OUT ? 'NULL' : ":{$param->name}",
+            $arguments = array_map(
+                fn(SqlParameter $param): string => "{$param->name} => " . ($param->mode === ParameterMode::OUT ? 'NULL' : ":{$param->name}"),
                 $parameters
             );
 
-            return "CALL {$stored_procedure}(" . implode(', ', $placeholders) . ")";
+            return "CALL {$stored_procedure}(" . implode(', ', $arguments) . ")";
         }
 
-        $inParams = array_filter(
-            $parameters,
-            fn(SqlParameter $param): bool => $param->mode !== ParameterMode::OUT
+        $arguments = array_map(
+            fn(SqlParameter $param): string => "{$param->name} => :{$param->name}",
+            $this->inputParameters($parameters)
         );
 
-        $placeholders = array_map(
-            fn(SqlParameter $param): string => ":{$param->name}",
-            $inParams
-        );
-
-        return "SELECT * FROM {$stored_procedure}(" . implode(', ', $placeholders) . ")";
+        return "SELECT * FROM {$stored_procedure}(" . implode(', ', $arguments) . ")";
     }
 
     /**
      * Bind IN and INOUT parameters to the statement.
      *
-     * OUT parameters are ignored — PostgreSQL returns them as result set columns.
+     * OUT parameters are not bound — PostgreSQL returns them as result set columns.
      *
      * @inheritDoc
+     * @throws StoredProcedureException
      */
-    public function bindParameters(PDOStatement $statement, array $parameters, PDO $pdo): void
+    public function prepare(string $stored_procedure, array $parameters): Call
     {
-        foreach ($parameters as $parameter) {
-            if ($parameter->mode === ParameterMode::OUT) {
-                continue;
-            }
+        $statement = $this->pdo->prepare($this->getQuerySyntax($stored_procedure, $parameters));
 
+        foreach ($this->inputParameters($parameters) as $parameter) {
             $statement->bindValue(
                 ":{$parameter->name}",
                 $parameter->value,
                 $parameter->type->toPdoType()
             );
         }
+
+        $outputs = $this->outputParameters($parameters);
+
+        return new Call($statement, fn(array $row_sets): array => $this->readOutputColumns($outputs, $row_sets));
     }
 
     /**
@@ -106,15 +97,38 @@ class PgSql extends AbstractDriver implements DriverInterface
     }
 
     /**
-     * PostgreSQL functions return output values as columns in the result set,
-     * so there are no separate output variables to retrieve.
-     *
-     * @inheritDoc
-     * @return array Always empty — read output from the result set rows instead.
+     * @param SqlParameter[] $parameters
+     * @return SqlParameter[] The IN and INOUT parameters
      */
-    public function getOutputValues(array $parameters, PDO $pdo): array
+    private function inputParameters(array $parameters): array
     {
-        return [];
+        return array_filter(
+            $parameters,
+            fn(SqlParameter $param): bool => $param->mode !== ParameterMode::OUT
+        );
+    }
+
+    /**
+     * Read the output values from the columns of the first row.
+     *
+     * Unquoted identifiers are folded to lower case by PostgreSQL, so the
+     * lower-cased name is used when the exact name is not found.
+     *
+     * @param SqlParameter[] $parameters The OUT and INOUT parameters
+     * @param array<int, array<mixed>> $row_sets
+     * @return array<string, mixed>
+     */
+    private function readOutputColumns(array $parameters, array $row_sets): array
+    {
+        $row = $row_sets[0][0] ?? [];
+        $columns = is_object($row) ? get_object_vars($row) : (array) $row;
+
+        $outputs = [];
+        foreach ($parameters as $parameter) {
+            $outputs[$parameter->name] = $columns[$parameter->name] ?? $columns[strtolower($parameter->name)] ?? null;
+        }
+
+        return $outputs;
     }
 
     /**
@@ -126,10 +140,6 @@ class PgSql extends AbstractDriver implements DriverInterface
      */
     private function isProcedure(string $name): bool
     {
-        if ($this->pdo === null) {
-            return false;
-        }
-
         if (isset($this->procedures[$name])) {
             return $this->procedures[$name];
         }

@@ -93,9 +93,7 @@ echo $result->getAffectedRows(); // e.g. 1
 
 ### Output Parameters
 
-#### MySQL / SQL Server
-
-OUT and INOUT parameters are retrieved automatically via the `ResultSet`:
+OUT and INOUT parameters are retrieved via the `ResultSet`, whatever the database:
 
 ```php
 use StoredProcedures\{SqlParameter, DbType, ParameterMode};
@@ -108,14 +106,15 @@ $result = $connection->execute('sp_insert_and_return_id', [
 $newId = $result->getOutputValue('p_id');
 ```
 
+`getOutputValue()` throws an `OutOfRangeException` when no OUT or INOUT parameter has the given name.
+
 #### PostgreSQL
 
 Both functions and procedures are supported: the package looks up the routine in `pg_proc` and generates `SELECT * FROM fn(...)` for a function or `CALL sp(...)` for a procedure (the lookup is cached per name).
 
-PostgreSQL returns OUT and INOUT values as **columns of the result row** — read them from the row instead of `getOutputValue()`:
+PostgreSQL returns OUT and INOUT values as **columns of the result row**: they are available both as output values and in the rows.
 
 ```php
-// Function: OUT parameters are not passed in the call
 $row = $connection
     ->procedure('fn_insert_user_returning_id')
     ->input('p_name', 'Alice')
@@ -123,16 +122,17 @@ $row = $connection
     ->single();
 
 $newId = $row->p_id; // OUT column
-
-// Procedure: INOUT values are passed in, OUT parameters are sent as NULL
-$row = $connection
-    ->procedure('sp_lookup_country_name')
-    ->input('p_iso', 'FR')
-    ->inout('p_name', '')
-    ->single();
-
-echo $row->p_name; // "France"
 ```
+
+### Parameter Order
+
+| Driver | Parameters are matched… |
+|--------|-------------------------|
+| **PostgreSQL** | **by name** (named notation `fn(p_name => :p_name)`): the order does not matter, but the names must match the routine's argument names |
+| **MySQL** / **SQL Server** | **by position**: pass them in the order they are declared in the procedure |
+
+> [!WARNING]
+> With MySQL and SQL Server, parameter names are only used as placeholders. Passing parameters in the wrong order silently swaps their values.
 
 ### Fluent Procedure Builder
 
@@ -151,7 +151,7 @@ $result = $connection
     ->procedure('sp_insert_user')
     ->input('p_name', 'Alice')
     ->output('p_id', DbType::INTEGER)
-    ->all();
+    ->execute();
 
 echo $result->getOutputValue('p_id');
 
@@ -164,11 +164,12 @@ $result = $connection
 
 echo $result->getOutputValue('p_name'); // "France"
 
-// Shorthand for affected-rows-only calls
+// Affected rows
 $affected = $connection
     ->procedure('sp_delete_user')
     ->input('p_id', 42)
-    ->execute(); // Returns int
+    ->execute()
+    ->getAffectedRows();
 ```
 
 ### Multi-Result-Set Procedures
@@ -219,7 +220,7 @@ $result = $connection->query('sp_search', [
 | Driver | PDO name | Syntax generated         | OUT/INOUT mechanism |
 |--------|----------|--------------------------|---------------------|
 | **MySQL** | `mysql` | `CALL \`sp\`(:in, @out)` | `@user_variables` + `SELECT @var` |
-| **PostgreSQL** | `pgsql` | `SELECT * FROM fn(:in, :inout)` / `CALL sp(:in, NULL, :inout)` | OUT/INOUT returned as result columns |
+| **PostgreSQL** | `pgsql` | `SELECT * FROM fn(p_in => :p_in)` / `CALL sp(p_in => :p_in, p_out => NULL)` | OUT/INOUT read from the result columns |
 | **SQL Server** | `sqlsrv` / `dblib` | `{CALL [sp](:in, :out)}` | `PDO::PARAM_INPUT_OUTPUT` binding |
 
 The correct driver is resolved automatically from `PDO::ATTR_DRIVER_NAME`.

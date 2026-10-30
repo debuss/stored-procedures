@@ -7,6 +7,7 @@ use Countable;
 use IteratorAggregate;
 use OutOfRangeException;
 use Traversable;
+use function array_key_exists;
 use function count;
 
 /**
@@ -109,10 +110,15 @@ readonly class ResultSet implements IteratorAggregate, Countable
      *
      * @param string $name
      * @return mixed
+     * @throws OutOfRangeException When no OUT or INOUT parameter has this name
      */
     public function getOutputValue(string $name): mixed
     {
-        return $this->output_values[$name] ?? null;
+        if (!array_key_exists($name, $this->output_values)) {
+            throw new OutOfRangeException("No output parameter named '$name'.");
+        }
+
+        return $this->output_values[$name];
     }
 
     // ---------------------------------------------------------------

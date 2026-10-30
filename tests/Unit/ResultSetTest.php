@@ -118,10 +118,17 @@ describe('output values', function () {
         expect($rs->getOutputValue('p_id'))->toBe(42);
     });
 
-    it('returns null for missing output value', function () {
+    it('returns a null output value', function () {
+        $rs = new ResultSet([], ['p_id' => null]);
+
+        expect($rs->getOutputValue('p_id'))->toBeNull();
+    });
+
+    it('throws OutOfRangeException for an unknown output parameter', function () {
         $rs = new ResultSet([], ['p_id' => 42]);
 
-        expect($rs->getOutputValue('p_missing'))->toBeNull();
+        expect(fn() => $rs->getOutputValue('p_missing'))
+            ->toThrow(OutOfRangeException::class, "No output parameter named 'p_missing'.");
     });
 });
 

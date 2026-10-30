@@ -3,12 +3,16 @@
 namespace StoredProcedures\Driver;
 
 use PDO;
-use PDOStatement;
 use StoredProcedures\Exception\StoredProcedureException;
 use StoredProcedures\ParameterMode;
 use StoredProcedures\SqlParameter;
 
-class MySql extends AbstractDriver implements DriverInterface
+/**
+ * MySQL driver.
+ *
+ * MySQL has no named notation for CALL: parameters are passed in the order they are declared.
+ */
+class MySql extends AbstractDriver
 {
 
     /**
@@ -18,7 +22,6 @@ class MySql extends AbstractDriver implements DriverInterface
      * parameters use MySQL user variables (@name).
      *
      * @inheritDoc
-     * @throws StoredProcedureException
      */
     public function getQuerySyntax(string $stored_procedure, array $parameters = []): string
     {
@@ -40,12 +43,15 @@ class MySql extends AbstractDriver implements DriverInterface
      * Bind IN parameters to the statement and initialize user variables for INOUT parameters.
      *
      * OUT parameters require no binding — they use MySQL @user_variables that are
-     * written to by the procedure and read back via {@see getOutputValues()}.
+     * written to by the procedure and read back with a single SELECT.
      *
      * @inheritDoc
+     * @throws StoredProcedureException
      */
-    public function bindParameters(PDOStatement $statement, array $parameters, PDO $pdo): void
+    public function prepare(string $stored_procedure, array $parameters): Call
     {
+        $statement = $this->pdo->prepare($this->getQuerySyntax($stored_procedure, $parameters));
+
         foreach ($parameters as $parameter) {
             match ($parameter->mode) {
                 ParameterMode::IN => $statement->bindValue(
@@ -53,49 +59,47 @@ class MySql extends AbstractDriver implements DriverInterface
                     $parameter->value,
                     $parameter->type->toPdoType()
                 ),
-                ParameterMode::INOUT => $this->initUserVariable($pdo, $parameter),
+                ParameterMode::INOUT => $this->initUserVariable($parameter),
                 ParameterMode::OUT => null,
             };
         }
-    }
 
-    /**
-     * Retrieve output values from MySQL user variables in a single query.
-     *
-     * @inheritDoc
-     * @return array<string, mixed> Output values keyed by parameter name
-     */
-    public function getOutputValues(array $parameters, PDO $pdo): array
-    {
-        $outputParams = array_filter(
-            $parameters,
-            fn(SqlParameter $param): bool => $param->mode !== ParameterMode::IN
-        );
-
-        if (empty($outputParams)) {
-            return [];
-        }
-
-        $selects = array_map(
-            fn(SqlParameter $param): string => "@{$param->name} AS `{$param->name}`",
-            $outputParams
-        );
-
-        $stmt = $pdo->query('SELECT ' . implode(', ', $selects));
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
-        $stmt->closeCursor();
-
-        return $row ?: [];
+        return new Call($statement, fn(): array => $this->fetchUserVariables($this->outputParameters($parameters)));
     }
 
     /**
      * Initialize a MySQL user variable with the INOUT parameter's initial value.
      */
-    private function initUserVariable(PDO $pdo, SqlParameter $parameter): void
+    private function initUserVariable(SqlParameter $parameter): void
     {
-        $stmt = $pdo->prepare("SET @{$parameter->name} = ?");
-        $stmt->execute([$parameter->value]);
-        $stmt->closeCursor();
+        $statement = $this->pdo->prepare("SET @{$parameter->name} = ?");
+        $statement->bindValue(1, $parameter->value, $parameter->type->toPdoType());
+        $statement->execute();
+        $statement->closeCursor();
+    }
+
+    /**
+     * Retrieve output values from MySQL user variables in a single query.
+     *
+     * @param SqlParameter[] $parameters The OUT and INOUT parameters
+     * @return array<string, mixed> Output values keyed by parameter name
+     */
+    private function fetchUserVariables(array $parameters): array
+    {
+        if (empty($parameters)) {
+            return [];
+        }
+
+        $selects = array_map(
+            fn(SqlParameter $param): string => "@{$param->name} AS `{$param->name}`",
+            $parameters
+        );
+
+        $statement = $this->pdo->query('SELECT ' . implode(', ', $selects));
+        $row = $statement->fetch(PDO::FETCH_ASSOC);
+        $statement->closeCursor();
+
+        return $row ?: [];
     }
 
     /**
@@ -112,4 +116,3 @@ class MySql extends AbstractDriver implements DriverInterface
         ));
     }
 }
-

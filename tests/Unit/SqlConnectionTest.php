@@ -1,6 +1,7 @@
 <?php
 
 use StoredProcedures\DbType;
+use StoredProcedures\Driver\Call;
 use StoredProcedures\Driver\DriverInterface;
 use StoredProcedures\Exception\MultipleResultsException;
 use StoredProcedures\Exception\NoResultsException;
@@ -43,7 +44,7 @@ function injectDriver(SqlConnection $connection, DriverInterface $driver): void
 /**
  * Helper: set up a full mock chain (driver + statement) for SqlConnection calls.
  */
-function setupMocks(string $driverName = 'mysql'): array
+function setupMocks(string $driverName = 'mysql', array $outputs = []): array
 {
     [$connection, $pdo] = createConnection($driverName);
 
@@ -52,9 +53,9 @@ function setupMocks(string $driverName = 'mysql'): array
 
     injectDriver($connection, $driver);
 
-    $driver->shouldReceive('getQuerySyntax')->andReturn('CALL `sp_test`()');
-    $driver->shouldReceive('bindParameters');
-    $pdo->shouldReceive('prepare')->andReturn($stmt);
+    $driver->shouldReceive('prepare')->andReturn(new Call($stmt, fn(): array => $outputs))->byDefault();
+    $driver->shouldReceive('fetchRowSets')->andReturn([])->byDefault();
+    $stmt->shouldReceive('rowCount')->andReturn(0)->byDefault();
 
     return [$connection, $pdo, $driver, $stmt];
 }
@@ -133,7 +134,6 @@ describe('parameter normalization', function () {
         [$connection, $pdo, $driver, $stmt] = setupMocks();
 
         $driver->shouldReceive('fetchRowSets')->andReturn([]);
-        $driver->shouldReceive('getOutputValues')->andReturn([]);
         $stmt->shouldReceive('execute')->once();
         $stmt->shouldReceive('closeCursor')->once();
 
@@ -146,7 +146,6 @@ describe('parameter normalization', function () {
         [$connection, $pdo, $driver, $stmt] = setupMocks();
 
         $driver->shouldReceive('fetchRowSets')->andReturn([]);
-        $driver->shouldReceive('getOutputValues')->andReturn([]);
         $stmt->shouldReceive('execute')->once();
         $stmt->shouldReceive('closeCursor')->once();
 
@@ -163,12 +162,11 @@ describe('parameter normalization', function () {
 
 describe('execute()', function () {
     it('returns a ResultSet with affected rows and output values', function () {
-        [$connection, $pdo, $driver, $stmt] = setupMocks();
+        [$connection, $pdo, $driver, $stmt] = setupMocks('mysql', ['p_id' => 42]);
 
         $stmt->shouldReceive('execute')->once();
         $stmt->shouldReceive('rowCount')->once()->andReturn(3);
         $stmt->shouldReceive('closeCursor')->once();
-        $driver->shouldReceive('getOutputValues')->andReturn(['p_id' => 42]);
 
         $result = $connection->execute('sp_test', ['p_name' => 'France']);
 
@@ -184,6 +182,40 @@ describe('execute()', function () {
 // ---------------------------------------------------------------
 
 describe('query()', function () {
+    it('passes the normalized parameters to the driver', function () {
+        [$connection, $pdo, $driver, $stmt] = setupMocks();
+
+        $driver->shouldReceive('prepare')
+            ->once()
+            ->with('sp_test', Mockery::on(fn(array $params): bool => $params == [new SqlParameter('p_name', 'France', DbType::STRING)]))
+            ->andReturn(new Call($stmt, fn(): array => []));
+        $stmt->shouldReceive('execute')->once();
+        $stmt->shouldReceive('closeCursor')->once();
+
+        $connection->query('sp_test', ['p_name' => 'France']);
+    });
+
+    it('closes the cursor when execution fails', function () {
+        [$connection, $pdo, $driver, $stmt] = setupMocks();
+
+        $stmt->shouldReceive('execute')->once()->andThrow(new PDOException('boom'));
+        $stmt->shouldReceive('closeCursor')->once();
+
+        expect(fn() => $connection->query('sp_test'))->toThrow(PDOException::class, 'boom');
+    });
+
+    it('passes the fetched row sets to the output values reader', function () {
+        [$connection, $pdo, $driver, $stmt] = setupMocks();
+
+        $rows = [['p_id' => 7]];
+        $driver->shouldReceive('prepare')->andReturn(new Call($stmt, fn(array $row_sets): array => ['p_id' => $row_sets[0][0]['p_id']]));
+        $driver->shouldReceive('fetchRowSets')->andReturn([$rows]);
+        $stmt->shouldReceive('execute')->once();
+        $stmt->shouldReceive('closeCursor')->once();
+
+        expect($connection->query('sp_test')->getOutputValue('p_id'))->toBe(7);
+    });
+
     it('returns a ResultSet with row sets and output values', function () {
         [$connection, $pdo, $driver, $stmt] = setupMocks();
 
@@ -192,7 +224,6 @@ describe('query()', function () {
         $stmt->shouldReceive('execute')->once();
         $stmt->shouldReceive('closeCursor')->once();
         $driver->shouldReceive('fetchRowSets')->andReturn([$rows]);
-        $driver->shouldReceive('getOutputValues')->andReturn([]);
 
         $result = $connection->query('sp_test');
 

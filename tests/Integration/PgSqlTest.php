@@ -84,3 +84,34 @@ it('calls a procedure with an INOUT parameter', function (string $iso, string $e
     'known ISO' => ['FR', 'France'],
     'unknown ISO' => ['ZZ', 'Unknown'],
 ]);
+
+it('returns OUT parameters from execute()', function () {
+    $result = $this->connection
+        ->procedure('sp_insert_and_return_country')
+        ->input('p_iso', 'LU')
+        ->input('p_name', 'Luxembourg')
+        ->output('p_country_id', DbType::INTEGER)
+        ->execute();
+
+    expect($result->getOutputValue('p_country_id'))->toBeGreaterThan(10);
+});
+
+it('reads function INOUT parameters as output values', function () {
+    $result = $this->connection
+        ->procedure('fn_search_and_return_country')
+        ->input('p_iso', 'FR')
+        ->inout('p_name', 'Unknown')
+        ->all();
+
+    expect($result->getOutputValue('p_name'))->toBe('France');
+});
+
+it('matches parameters by name, whatever their order', function (string $routine) {
+    $result = $this->connection
+        ->procedure($routine)
+        ->inout('p_name', 'Unknown')
+        ->input('p_iso', 'FR')
+        ->all();
+
+    expect($result->getOutputValue('p_name'))->toBe('France');
+})->with(['fn_search_and_return_country', 'sp_search_and_return_country']);
