@@ -106,6 +106,17 @@ jobs:
           docker exec ${{ job.services.mssql.id }} /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P Demo@12345 -C -b -Q "CREATE DATABASE demo"
           docker exec ${{ job.services.mssql.id }} /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P Demo@12345 -C -b -d demo -i /tmp/init.sql
 
+      # pdo_sqlsrv needs the Microsoft ODBC Driver, which setup-php does not install
+      - name: Install the Microsoft ODBC Driver for SQL Server
+        run: |
+          sudo apt-get update -q
+          if ! apt-cache show msodbcsql18 > /dev/null 2>&1; then
+            curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+            curl -fsSL "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/prod.list" | sudo tee /etc/apt/sources.list.d/mssql-release.list
+            sudo apt-get update -q
+          fi
+          sudo ACCEPT_EULA=Y apt-get install -y -q msodbcsql18
+
       - name: Set up PHP ${{ matrix.php }}
         uses: shivammathur/setup-php@v2
         with:
