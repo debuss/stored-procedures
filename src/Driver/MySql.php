@@ -33,7 +33,7 @@ class MySql extends AbstractDriver implements DriverInterface
             $parameters
         );
 
-        return "CALL `{$stored_procedure}`(" . implode(', ', $placeholders) . ")";
+        return "CALL {$this->escapeIdentifier($stored_procedure)}(" . implode(', ', $placeholders) . ")";
     }
 
     /**
@@ -96,6 +96,20 @@ class MySql extends AbstractDriver implements DriverInterface
         $stmt = $pdo->prepare("SET @{$parameter->name} = ?");
         $stmt->execute([$parameter->value]);
         $stmt->closeCursor();
+    }
+
+    /**
+     * Escape a MySQL identifier with backticks.
+     *
+     * Schema-qualified names (e.g. "db.sp_name") are split and each part
+     * is individually escaped: `db`.`sp_name`.
+     */
+    private function escapeIdentifier(string $identifier): string
+    {
+        return implode('.', array_map(
+            fn(string $part): string => "`{$part}`",
+            explode('.', $identifier)
+        ));
     }
 }
 

@@ -153,6 +153,18 @@ describe('firstOrDefault()', function () {
 
         expect($result)->toBe($default);
     });
+
+    it('returns null when no results and no default is given', function () {
+        [$connection, $driver, $stmt] = createProcedureTestConnection();
+
+        $stmt->shouldReceive('execute')->once();
+        $stmt->shouldReceive('fetch')->once()->andReturn(false);
+        $stmt->shouldReceive('closeCursor')->once();
+
+        $procedure = new Procedure($connection, 'sp_fetch');
+
+        expect($procedure->firstOrDefault())->toBeNull();
+    });
 });
 
 // ---------------------------------------------------------------
@@ -179,6 +191,7 @@ describe('single()', function () {
 
         $stmt->shouldReceive('execute')->once();
         $stmt->shouldReceive('fetch')->once()->andReturn(false);
+        $stmt->shouldReceive('closeCursor')->once();
 
         $procedure = new Procedure($connection, 'sp_fetch');
 
@@ -198,6 +211,7 @@ describe('singleOrDefault()', function () {
         $default = ['fallback' => true];
         $stmt->shouldReceive('execute')->once();
         $stmt->shouldReceive('fetch')->once()->andReturn(false);
+        $stmt->shouldReceive('closeCursor')->once();
 
         $procedure = new Procedure($connection, 'sp_fetch');
         $result = $procedure->singleOrDefault($default);

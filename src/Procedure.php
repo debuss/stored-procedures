@@ -84,7 +84,7 @@ class Procedure
      *
      * @throws StoredProcedureException
      */
-    public function firstOrDefault(null|array|stdClass $default = null): stdClass|array
+    public function firstOrDefault(null|array|stdClass $default = null): null|array|stdClass
     {
         return $this->connection->queryFirstOrDefault($this->stored_procedure, $this->parameters, $default);
     }

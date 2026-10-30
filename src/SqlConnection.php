@@ -23,7 +23,7 @@ class SqlConnection
 
         $this->driver = match ($driver) {
             'mysql' => new MySql(),
-            'pgsql' => new PgSql(),
+            'pgsql' => new PgSql($this->pdo),
             'sqlsrv', 'dblib' => new SqlSrv(),
             default => throw new UnsupportedDriverException("Unsupported database driver: $driver"),
         };
@@ -57,11 +57,12 @@ class SqlConnection
         $parameters = $this->normalizeParameters($parameters);
         $statement = $this->getStatement($stored_procedure, $parameters);
 
-        $statement->execute();
-
-        $affectedRows = $statement->rowCount();
-
-        $statement->closeCursor();
+        try {
+            $statement->execute();
+            $affectedRows = $statement->rowCount();
+        } finally {
+            $statement->closeCursor();
+        }
 
         return new ResultSet(
             [],
@@ -83,11 +84,12 @@ class SqlConnection
         $parameters = $this->normalizeParameters($parameters);
         $statement = $this->getStatement($stored_procedure, $parameters);
 
-        $statement->execute();
-
-        $row_sets = $this->driver->fetchRowSets($statement);
-
-        $statement->closeCursor();
+        try {
+            $statement->execute();
+            $row_sets = $this->driver->fetchRowSets($statement);
+        } finally {
+            $statement->closeCursor();
+        }
 
         return new ResultSet(
             $row_sets,
@@ -110,11 +112,12 @@ class SqlConnection
         $parameters = $this->normalizeParameters($parameters);
         $statement = $this->getStatement($stored_procedure, $parameters);
 
-        $statement->execute();
-
-        $result = $statement->fetch();
-
-        $statement->closeCursor();
+        try {
+            $statement->execute();
+            $result = $statement->fetch();
+        } finally {
+            $statement->closeCursor();
+        }
 
         if ($result === false) {
             throw new NoResultsException("No results found for '$stored_procedure'.");
@@ -129,10 +132,10 @@ class SqlConnection
      * @param string $stored_procedure
      * @param array<string, mixed>|SqlParameter[] $parameters
      * @param array|stdClass|null $default
-     * @return array|stdClass
+     * @return array|stdClass|null
      * @throws StoredProcedureException
      */
-    public function queryFirstOrDefault(string $stored_procedure, array $parameters = [], null|array|stdClass $default = null): array|stdClass
+    public function queryFirstOrDefault(string $stored_procedure, array $parameters = [], null|array|stdClass $default = null): null|array|stdClass
     {
         try {
             return $this->queryFirst($stored_procedure, $parameters);
@@ -157,16 +160,17 @@ class SqlConnection
         $parameters = $this->normalizeParameters($parameters);
         $statement = $this->getStatement($stored_procedure, $parameters);
 
-        $statement->execute();
-
-        $first = $statement->fetch();
+        try {
+            $statement->execute();
+            $first = $statement->fetch();
+            $second = $first === false ? false : $statement->fetch();
+        } finally {
+            $statement->closeCursor();
+        }
 
         if ($first === false) {
             throw new NoResultsException("No results found for '$stored_procedure'.");
         }
-
-        $second = $statement->fetch();
-        $statement->closeCursor();
 
         if ($second !== false) {
             throw new MultipleResultsException("Expected a single result for '$stored_procedure', but multiple rows were returned.");

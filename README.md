@@ -110,14 +110,28 @@ $newId = $result->getOutputValue('p_id');
 
 #### PostgreSQL
 
-PostgreSQL functions return OUT parameters as **columns in the result set** — no special handling needed:
+Both functions and procedures are supported: the package looks up the routine in `pg_proc` and generates `SELECT * FROM fn(...)` for a function or `CALL sp(...)` for a procedure (the lookup is cached per name).
+
+PostgreSQL returns OUT and INOUT values as **columns of the result row** — read them from the row instead of `getOutputValue()`:
 
 ```php
-$result = $connection->query('fn_insert_user_returning_id', [
-    'p_name' => 'Alice',
-]);
+// Function: OUT parameters are not passed in the call
+$row = $connection
+    ->procedure('fn_insert_user_returning_id')
+    ->input('p_name', 'Alice')
+    ->output('p_id', DbType::INTEGER)
+    ->single();
 
-$newId = $result->rows()[0]->p_id; // OUT column
+$newId = $row->p_id; // OUT column
+
+// Procedure: INOUT values are passed in, OUT parameters are sent as NULL
+$row = $connection
+    ->procedure('sp_lookup_country_name')
+    ->input('p_iso', 'FR')
+    ->inout('p_name', '')
+    ->single();
+
+echo $row->p_name; // "France"
 ```
 
 ### Fluent Procedure Builder
@@ -205,7 +219,7 @@ $result = $connection->query('sp_search', [
 | Driver | PDO name | Syntax generated         | OUT/INOUT mechanism |
 |--------|----------|--------------------------|---------------------|
 | **MySQL** | `mysql` | `CALL \`sp\`(:in, @out)` | `@user_variables` + `SELECT @var` |
-| **PostgreSQL** | `pgsql` | `SELECT * FROM fn(:in)`  | OUT returned as result columns |
+| **PostgreSQL** | `pgsql` | `SELECT * FROM fn(:in, :inout)` / `CALL sp(:in, NULL, :inout)` | OUT/INOUT returned as result columns |
 | **SQL Server** | `sqlsrv` / `dblib` | `{CALL [sp](:in, :out)}` | `PDO::PARAM_INPUT_OUTPUT` binding |
 
 The correct driver is resolved automatically from `PDO::ATTR_DRIVER_NAME`.
@@ -243,12 +257,14 @@ try {
 XDEBUG_MODE=coverage ./vendor/bin/pest --mutate --min=80 --parallel
 ```
 
+The integration tests in `tests/Integration` run against the demo databases below and are skipped when a database is unreachable. The DSNs can be overridden with the `MYSQL_DSN`, `PGSQL_DSN` and `SQLSRV_DSN` environment variables.
+
 ## Docker (demo databases)
 
 The repository includes a `docker-compose.yml` with MySQL, PostgreSQL, and SQL Server containers — each pre-loaded with a `countries` table, seed data, and example stored procedures/functions.
 
 ```bash
-docker compose up -d
+docker compose -f docker/docker-compose.yml --project-directory . up -d
 
 # Run the demo scripts
 php docker/mysql/mysql.php

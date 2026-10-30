@@ -98,3 +98,45 @@ BEGIN
 END;
 $$;
 
+
+-- 8. Function with an INOUT parameter (the input value is kept when the ISO is unknown)
+CREATE OR REPLACE FUNCTION fn_search_and_return_country(
+    p_iso         VARCHAR,
+    INOUT  p_name VARCHAR
+)
+LANGUAGE plpgsql STABLE
+AS $$
+BEGIN
+    SELECT COALESCE((SELECT name FROM countries WHERE iso = UPPER(p_iso)), p_name) INTO p_name;
+END;
+$$;
+
+-- ============================================================
+--  Procedures (PostgreSQL 14+ for OUT parameters)
+-- ============================================================
+
+-- 9. Insert a country and return the new ID via OUT parameter
+CREATE OR REPLACE PROCEDURE sp_insert_and_return_country(
+    p_iso         VARCHAR,
+    p_name        VARCHAR,
+    OUT p_country_id INTEGER
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    INSERT INTO countries (iso, name) VALUES (p_iso, p_name)
+    RETURNING id INTO p_country_id;
+END;
+$$;
+
+-- 10. INOUT example: pass an ISO, get back the country name (the input value is kept when the ISO is unknown)
+CREATE OR REPLACE PROCEDURE sp_search_and_return_country(
+    p_iso         VARCHAR,
+    INOUT  p_name VARCHAR
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    SELECT COALESCE((SELECT name FROM countries WHERE iso = UPPER(p_iso)), p_name) INTO p_name;
+END;
+$$;

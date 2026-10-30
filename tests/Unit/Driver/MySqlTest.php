@@ -76,10 +76,15 @@ describe('getQuerySyntax()', function () {
             ->toThrow(StoredProcedureException::class, 'Invalid parameter name');
     });
 
+    it('throws on empty name parts', function (string $name) {
+        expect(fn() => $this->driver->getQuerySyntax($name))
+            ->toThrow(StoredProcedureException::class, 'Invalid stored procedure name');
+    })->with(['mydb..sp_test', 'mydb.', '.sp_test']);
+
     it('allows dots in procedure names for schema-qualified calls', function () {
         $sql = $this->driver->getQuerySyntax('mydb.sp_test');
 
-        expect($sql)->toBe('CALL `mydb.sp_test`()');
+        expect($sql)->toBe('CALL `mydb`.`sp_test`()');
     });
 });
 

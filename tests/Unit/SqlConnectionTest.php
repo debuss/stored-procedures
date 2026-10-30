@@ -250,6 +250,16 @@ describe('queryFirstOrDefault()', function () {
         expect($result)->toBe($row);
     });
 
+    it('returns null when no results and no default is given', function () {
+        [$connection, $pdo, $driver, $stmt] = setupMocks();
+
+        $stmt->shouldReceive('execute')->once();
+        $stmt->shouldReceive('fetch')->once()->andReturn(false);
+        $stmt->shouldReceive('closeCursor')->once();
+
+        expect($connection->queryFirstOrDefault('sp_test'))->toBeNull();
+    });
+
     it('returns the default when no results', function () {
         [$connection, $pdo, $driver, $stmt] = setupMocks();
 
@@ -287,6 +297,7 @@ describe('querySingle()', function () {
 
         $stmt->shouldReceive('execute')->once();
         $stmt->shouldReceive('fetch')->once()->andReturn(false);
+        $stmt->shouldReceive('closeCursor')->once();
 
         expect(fn() => $connection->querySingle('sp_test'))
             ->toThrow(NoResultsException::class);
@@ -330,6 +341,7 @@ describe('querySingleOrDefault()', function () {
         $default = ['fallback' => true];
         $stmt->shouldReceive('execute')->once();
         $stmt->shouldReceive('fetch')->once()->andReturn(false);
+        $stmt->shouldReceive('closeCursor')->once();
 
         $result = $connection->querySingleOrDefault('sp_test', [], $default);
 

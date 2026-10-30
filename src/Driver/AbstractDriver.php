@@ -16,7 +16,7 @@ abstract class AbstractDriver
      */
     protected function assertValidProcedureName(string $name): void
     {
-        if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_.]*$/', $name)) {
+        if (!preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*$/', $name)) {
             throw new StoredProcedureException("Invalid stored procedure name: '$name'");
         }
     }
