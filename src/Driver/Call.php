@@ -16,7 +16,7 @@ final readonly class Call
 
     /**
      * @param PDOStatement $statement The prepared statement, parameters already bound
-     * @param Closure(array<int, array<mixed>>): array<string, mixed> $outputs Reads the output values, given the fetched row sets
+     * @param Closure(list<array<mixed>>): array<string, mixed> $outputs Reads the output values, given the fetched row sets
      */
     public function __construct(
         public PDOStatement $statement,
@@ -28,7 +28,7 @@ final readonly class Call
      *
      * Must be called after the statement has been executed and its row sets fetched.
      *
-     * @param array<int, array<mixed>> $row_sets
+     * @param list<array<mixed>> $row_sets
      * @return array<string, mixed>
      */
     public function getOutputValues(array $row_sets): array

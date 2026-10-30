@@ -15,11 +15,17 @@ class SqlConnection
     protected DriverInterface $driver;
 
     /**
+     * @throws StoredProcedureException When PDO is not in the PDO::ERRMODE_EXCEPTION error mode
      * @throws UnsupportedDriverException
      */
     public function __construct(
         protected PDO $pdo
     ) {
+        // Errors are reported with exceptions: in the other modes, a failing call would go unnoticed
+        if ($this->pdo->getAttribute(PDO::ATTR_ERRMODE) !== PDO::ERRMODE_EXCEPTION) {
+            throw new StoredProcedureException('The PDO instance must use the PDO::ERRMODE_EXCEPTION error mode.');
+        }
+
         $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
 
         $this->driver = match ($driver) {
@@ -111,11 +117,12 @@ class SqlConnection
      * Get the first row of a result set, or the default value if none is found.
      *
      * @template T of object
+     * @template D of array<string, mixed>|object|null = null
      * @param string $stored_procedure
      * @param array<string, mixed>|SqlParameter[] $parameters
-     * @param array<string, mixed>|object|null $default
+     * @param D $default
      * @param class-string<T>|null $class The class to map the row to (see {@see Hydrator}), or null to keep it as fetched
-     * @return ($class is null ? array<string, mixed>|stdClass|null : T|null)
+     * @return ($class is null ? array<string, mixed>|stdClass|D : T|D)
      * @throws StoredProcedureException
      */
     public function queryFirstOrDefault(string $stored_procedure, array $parameters = [], null|array|object $default = null, ?string $class = null): null|array|object
@@ -164,11 +171,12 @@ class SqlConnection
      * Get the only row of a result set, or the default value if none or more than 1 is found.
      *
      * @template T of object
+     * @template D = null
      * @param string $stored_procedure
      * @param array<string, mixed>|SqlParameter[] $parameters
-     * @param mixed $default
+     * @param D $default
      * @param class-string<T>|null $class The class to map the row to (see {@see Hydrator}), or null to keep it as fetched
-     * @return mixed
+     * @return ($class is null ? array<string, mixed>|stdClass|D : T|D)
      * @throws StoredProcedureException
      */
     public function querySingleOrDefault(string $stored_procedure, array $parameters = [], mixed $default = null, ?string $class = null): mixed

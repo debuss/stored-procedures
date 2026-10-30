@@ -24,6 +24,9 @@ function createConnection(string $driverName = 'mysql'): array
 {
     $pdo = Mockery::mock(PDO::class);
     $pdo->shouldReceive('getAttribute')
+        ->with(PDO::ATTR_ERRMODE)
+        ->andReturn(PDO::ERRMODE_EXCEPTION);
+    $pdo->shouldReceive('getAttribute')
         ->with(PDO::ATTR_DRIVER_NAME)
         ->andReturn($driverName);
 
@@ -84,6 +87,14 @@ describe('constructor', function () {
         [$conn] = createConnection('dblib');
         expect($conn)->toBeInstanceOf(SqlConnection::class);
     });
+
+    it('rejects a PDO instance not in the exception error mode', function (int $mode) {
+        $pdo = Mockery::mock(PDO::class);
+        $pdo->shouldReceive('getAttribute')->with(PDO::ATTR_ERRMODE)->andReturn($mode);
+
+        expect(fn() => new SqlConnection($pdo))
+            ->toThrow(StoredProcedureException::class, 'The PDO instance must use the PDO::ERRMODE_EXCEPTION error mode.');
+    })->with([PDO::ERRMODE_SILENT, PDO::ERRMODE_WARNING]);
 
     it('throws UnsupportedDriverException for unknown driver', function () {
         expect(function () {

@@ -4,6 +4,7 @@
 
 ### Breaking changes
 
+- `SqlConnection` requires a `PDO` instance in the `PDO::ERRMODE_EXCEPTION` error mode (the default since PHP 8), and throws a `StoredProcedureException` otherwise: in the other modes, failing calls went unnoticed.
 - `Procedure::execute()` returns a `ResultSet` instead of an `int`, so that OUT and INOUT values are no longer lost. Use `->execute()->getAffectedRows()` for the previous behavior.
 - PostgreSQL parameters are matched by name (named notation `fn(p_name => :p_name)`): parameter names must match the routine's argument names.
 - `ResultSet::getOutputValue()` throws an `OutOfRangeException` for an unknown name instead of returning `null`.
@@ -30,6 +31,14 @@
 - PostgreSQL INOUT parameters were not passed to the function.
 - MySQL INOUT user variables are initialized with the parameter type.
 - Procedure names with empty parts (e.g. `db..sp`) are rejected.
+- MySQL output values always contain every OUT and INOUT parameter (`null` when the user variables cannot be read).
+- `docker compose -f docker/docker-compose.yml up -d` works from the repository root.
+
+### Tooling
+
+- CI runs the integration tests against MySQL, PostgreSQL and SQL Server service containers, and PHPStan at level 8 (`phpstan.neon.dist`).
+- Composer scripts: `test`, `test:mutate`, `analyse`, `db:up`, `db:down`.
+- `.gitignore` and `.gitattributes` (tests, Docker files and CI config are excluded from the package archive).
 
 ## [0.1.0]
 

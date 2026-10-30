@@ -37,7 +37,7 @@ readonly class ResultSet implements IteratorAggregate, Countable
 {
 
     /**
-     * @param array<int, array<mixed>> $row_sets
+     * @param list<array<mixed>> $row_sets
      * @param array<string, mixed> $output_values
      * @param int $affected_rows
      * @param class-string<T>|null $class The class to map the rows to, or null to keep them as fetched

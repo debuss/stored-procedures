@@ -19,6 +19,9 @@ function createProcedureTestConnection(): array
 {
     $pdo = Mockery::mock(PDO::class);
     $pdo->shouldReceive('getAttribute')
+        ->with(PDO::ATTR_ERRMODE)
+        ->andReturn(PDO::ERRMODE_EXCEPTION);
+    $pdo->shouldReceive('getAttribute')
         ->with(PDO::ATTR_DRIVER_NAME)
         ->andReturn('mysql');
 

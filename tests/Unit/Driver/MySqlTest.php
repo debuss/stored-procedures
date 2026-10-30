@@ -129,8 +129,8 @@ describe('output values', function () {
     it('returns empty array without querying when there are no output parameters', function () {
         $stmt = Mockery::mock(PDOStatement::class)->shouldIgnoreMissing();
 
-        $this->pdo->shouldReceive('prepare')->andReturn($stmt);
-        $this->pdo->shouldNotReceive('query');
+        // Only the CALL is prepared: no SELECT of user variables
+        $this->pdo->shouldReceive('prepare')->once()->andReturn($stmt);
 
         $call = $this->driver->prepare('sp_find', [new SqlParameter('p_name', 'France', DbType::STRING)]);
 
@@ -141,14 +141,16 @@ describe('output values', function () {
         $stmt = Mockery::mock(PDOStatement::class)->shouldIgnoreMissing();
         $select = Mockery::mock(PDOStatement::class);
 
-        $this->pdo->shouldReceive('prepare')->andReturn($stmt);
-        $this->pdo->shouldReceive('query')
+        $this->pdo->shouldReceive('prepare')->with('SET @p_name = ?')->andReturn($stmt);
+        $this->pdo->shouldReceive('prepare')->with('CALL `sp_mixed`(:p_in, @p_id, @p_name)')->andReturn($stmt);
+        $this->pdo->shouldReceive('prepare')
             ->once()
-            ->with('SELECT @p_id AS `p_id`, @p_name AS `p_name`')
+            ->with('SELECT @p_id, @p_name')
             ->andReturn($select);
+        $select->shouldReceive('execute')->once();
         $select->shouldReceive('fetch')
-            ->with(PDO::FETCH_ASSOC)
-            ->andReturn(['p_id' => 42, 'p_name' => 'France']);
+            ->with(PDO::FETCH_NUM)
+            ->andReturn([42, 'France']);
         $select->shouldReceive('closeCursor')->once();
 
         $call = $this->driver->prepare('sp_mixed', [
@@ -160,17 +162,18 @@ describe('output values', function () {
         expect($call->getOutputValues([]))->toBe(['p_id' => 42, 'p_name' => 'France']);
     });
 
-    it('returns empty array when SELECT returns false', function () {
+    it('returns null values when SELECT returns no row', function () {
         $stmt = Mockery::mock(PDOStatement::class)->shouldIgnoreMissing();
         $select = Mockery::mock(PDOStatement::class);
 
-        $this->pdo->shouldReceive('prepare')->andReturn($stmt);
-        $this->pdo->shouldReceive('query')->andReturn($select);
-        $select->shouldReceive('fetch')->with(PDO::FETCH_ASSOC)->andReturn(false);
+        $this->pdo->shouldReceive('prepare')->with('CALL `sp_insert`(@p_id)')->andReturn($stmt);
+        $this->pdo->shouldReceive('prepare')->with('SELECT @p_id')->andReturn($select);
+        $select->shouldReceive('execute');
+        $select->shouldReceive('fetch')->with(PDO::FETCH_NUM)->andReturn(false);
         $select->shouldReceive('closeCursor');
 
         $call = $this->driver->prepare('sp_insert', [new SqlParameter('p_id', null, DbType::INTEGER, ParameterMode::OUT)]);
 
-        expect($call->getOutputValues([]))->toBe([]);
+        expect($call->getOutputValues([]))->toBe(['p_id' => null]);
     });
 });

@@ -115,7 +115,7 @@ class PgSql extends AbstractDriver
      * lower-cased name is used when the exact name is not found.
      *
      * @param SqlParameter[] $parameters The OUT and INOUT parameters
-     * @param array<int, array<mixed>> $row_sets
+     * @param list<array<mixed>> $row_sets
      * @return array<string, mixed>
      */
     private function readOutputColumns(array $parameters, array $row_sets): array

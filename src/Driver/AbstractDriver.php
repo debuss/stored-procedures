@@ -74,7 +74,7 @@ abstract class AbstractDriver implements DriverInterface
      * Override in drivers that do not (PostgreSQL).
      *
      * @param PDOStatement $statement An already-executed statement
-     * @return array<int, array<mixed>>
+     * @return list<array<mixed>>
      */
     public function fetchRowSets(PDOStatement $statement): array
     {

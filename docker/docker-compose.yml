@@ -1,3 +1,5 @@
+name: stored-procedures
+
 services:
   db:
     image: mysql:5.7
@@ -7,7 +9,7 @@ services:
         hard: 1048576
     volumes:
       - db_data:/var/lib/mysql
-      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     environment:
       - MYSQL_ROOT_PASSWORD=demo
       - MYSQL_DATABASE=demo
@@ -22,7 +24,7 @@ services:
         soft: 1048576
         hard: 1048576
     volumes:
-      - ./docker/pgsql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./pgsql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     environment:
       - POSTGRES_USER=demo
       - POSTGRES_PASSWORD=demo
@@ -36,8 +38,8 @@ services:
         soft: 1048576
         hard: 1048576
     volumes:
-      - ./docker/sqlsrv/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-      - ./docker/sqlsrv/entrypoint.sh:/docker-entrypoint-initdb.d/entrypoint.sh:ro
+      - ./sqlsrv/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./sqlsrv/entrypoint.sh:/docker-entrypoint-initdb.d/entrypoint.sh:ro
     environment:
       - ACCEPT_EULA=Y
       - SA_PASSWORD=Demo@12345

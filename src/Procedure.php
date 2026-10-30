@@ -91,9 +91,10 @@ class Procedure
      * Execute the procedure and return the first row, or the default if none found.
      *
      * @template T of object
-     * @param array<string, mixed>|object|null $default
+     * @template D of array<string, mixed>|object|null = null
+     * @param D $default
      * @param class-string<T>|null $class The class to map the row to (see {@see Hydrator}), or null to keep it as fetched
-     * @return ($class is null ? array<string, mixed>|stdClass|null : T|null)
+     * @return ($class is null ? array<string, mixed>|stdClass|D : T|D)
      * @throws StoredProcedureException
      */
     public function firstOrDefault(null|array|object $default = null, ?string $class = null): null|array|object
@@ -118,7 +119,10 @@ class Procedure
      * Execute the procedure and return the only row, or the default if none or multiple found.
      *
      * @template T of object
+     * @template D = null
+     * @param D $default
      * @param class-string<T>|null $class The class to map the row to (see {@see Hydrator}), or null to keep it as fetched
+     * @return ($class is null ? array<string, mixed>|stdClass|D : T|D)
      * @throws StoredProcedureException
      */
     public function singleOrDefault(mixed $default = null, ?string $class = null): mixed

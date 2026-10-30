@@ -26,7 +26,7 @@ interface DriverInterface
      * row sets via nextRowset(), while PostgreSQL returns a single row set.
      *
      * @param PDOStatement $statement An already-executed statement
-     * @return array<int, array<mixed>> Array of row sets
+     * @return list<array<mixed>> Array of row sets
      */
     public function fetchRowSets(PDOStatement $statement): array;
 

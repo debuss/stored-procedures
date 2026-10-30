@@ -55,10 +55,6 @@ final class Hydrator
 
         $values = is_object($row) ? get_object_vars($row) : $row;
 
-        if ($class === stdClass::class) {
-            return (object) $values;
-        }
-
         $columns = [];
         foreach ($values as $name => $value) {
             $columns[self::normalize((string) $name)] = $value;
@@ -69,7 +65,7 @@ final class Hydrator
         try {
             return $constructor
                 ? self::construct($class, $members, $columns)
-                : self::assign($class, $members, $columns);
+                : self::assign($class, $members, $columns, $values);
         } catch (TypeError|ValueError|DateMalformedStringException $e) {
             throw new MappingException("Cannot map the row to $class: {$e->getMessage()}", previous: $e);
         }
@@ -105,12 +101,22 @@ final class Hydrator
      * @template T of object
      * @param class-string<T> $class
      * @param array<string, ReflectionParameter|ReflectionProperty> $properties
-     * @param array<string, mixed> $columns
+     * @param array<string, mixed> $columns The values, keyed by normalized name
+     * @param array<array-key, mixed> $values The values, keyed by column name
      * @return T
      */
-    private static function assign(string $class, array $properties, array $columns): object
+    private static function assign(string $class, array $properties, array $columns, array $values): object
     {
         $object = new $class();
+
+        // stdClass has no declared properties: every column becomes a property
+        if ($object instanceof stdClass) {
+            foreach ($values as $name => $value) {
+                $object->{$name} = $value;
+            }
+
+            return $object;
+        }
 
         foreach ($properties as $key => $property) {
             if (array_key_exists($key, $columns)) {

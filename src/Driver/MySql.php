@@ -90,16 +90,20 @@ class MySql extends AbstractDriver
             return [];
         }
 
-        $selects = array_map(
-            fn(SqlParameter $param): string => "@{$param->name} AS `{$param->name}`",
-            $parameters
-        );
+        $parameters = array_values($parameters);
+        $variables = array_map(fn(SqlParameter $param): string => "@{$param->name}", $parameters);
 
-        $statement = $this->pdo->query('SELECT ' . implode(', ', $selects));
-        $row = $statement->fetch(PDO::FETCH_ASSOC);
+        $statement = $this->pdo->prepare('SELECT ' . implode(', ', $variables));
+        $statement->execute();
+        $row = $statement->fetch(PDO::FETCH_NUM);
         $statement->closeCursor();
 
-        return $row ?: [];
+        $outputs = [];
+        foreach ($parameters as $index => $parameter) {
+            $outputs[$parameter->name] = is_array($row) ? $row[$index] : null;
+        }
+
+        return $outputs;
     }
 
     /**

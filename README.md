@@ -23,6 +23,7 @@ Built for teams where direct SQL queries are forbidden and all database access g
 - PHP **8.3+**
 - `ext-pdo`
 - One of: `ext-pdo_mysql`, `ext-pdo_pgsql`, `ext-pdo_sqlsrv` (or `ext-pdo_dblib`)
+- A `PDO` instance in the `PDO::ERRMODE_EXCEPTION` error mode (the default since PHP 8)
 
 > [!NOTE]
 > For PostgreSQL, version 14+ is required.
@@ -305,21 +306,21 @@ try {
 ## Testing
 
 ```bash
-# Run the test suite
-./vendor/bin/pest --parallel
-
-# Run with mutation testing
-XDEBUG_MODE=coverage ./vendor/bin/pest --mutate --min=80 --parallel
+composer db:up          # Start the demo databases (see below)
+composer test           # Run the test suite
+composer test:mutate    # Run the mutation tests (requires Xdebug)
+composer analyse        # Run PHPStan
+composer db:down        # Stop the demo databases
 ```
 
-The integration tests in `tests/Integration` run against the demo databases below and are skipped when a database is unreachable. The DSNs can be overridden with the `MYSQL_DSN`, `PGSQL_DSN` and `SQLSRV_DSN` environment variables.
+The integration tests in `tests/Integration` run against the demo databases below and are skipped when a database is unreachable. Set the `DB_REQUIRED` environment variable to make them fail instead (as in CI). The DSNs can be overridden with the `MYSQL_DSN`, `PGSQL_DSN` and `SQLSRV_DSN` environment variables.
 
 ## Docker (demo databases)
 
 The repository includes a `docker-compose.yml` with MySQL, PostgreSQL, and SQL Server containers — each pre-loaded with a `countries` table, seed data, and example stored procedures/functions.
 
 ```bash
-docker compose -f docker/docker-compose.yml --project-directory . up -d
+docker compose -f docker/docker-compose.yml up -d    # or: composer db:up
 
 # Run the demo scripts
 php docker/mysql/mysql.php
