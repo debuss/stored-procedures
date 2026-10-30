@@ -10,7 +10,9 @@ use StoredProcedures\SqlParameter;
 /**
  * MySQL driver.
  *
- * MySQL has no named notation for CALL: parameters are passed in the order they are declared.
+ * MySQL has no named notation for CALL: parameters are passed in the order they are declared,
+ * unless they are matched by name, using the parameters declared in INFORMATION_SCHEMA.
+ * MySQL has no default parameter values: every declared parameter must then be given.
  */
 class MySql extends AbstractDriver
 {
@@ -50,6 +52,10 @@ class MySql extends AbstractDriver
      */
     public function prepare(string $stored_procedure, array $parameters): Call
     {
+        if ($this->match_parameters_by_name) {
+            $parameters = $this->requireAll($stored_procedure, $this->orderByDeclaration($stored_procedure, $parameters));
+        }
+
         $statement = $this->pdo->prepare($this->getQuerySyntax($stored_procedure, $parameters));
 
         foreach ($parameters as $parameter) {
@@ -65,6 +71,57 @@ class MySql extends AbstractDriver
         }
 
         return new Call($statement, fn(): array => $this->fetchUserVariables($this->outputParameters($parameters)));
+    }
+
+    /**
+     * @param list<SqlParameter|null> $parameters The parameters in declaration order
+     * @return list<SqlParameter>
+     * @throws StoredProcedureException When a declared parameter is not given
+     */
+    private function requireAll(string $stored_procedure, array $parameters): array
+    {
+        $given = array_filter($parameters);
+
+        if (count($given) !== count($parameters)) {
+            $missing = array_diff_key($this->declaredParameters($stored_procedure) ?? [], $given);
+
+            throw new StoredProcedureException(
+                "Procedure '$stored_procedure' expects the parameter '" . reset($missing) . "'."
+            );
+        }
+
+        return array_values($given);
+    }
+
+    /**
+     * @inheritDoc
+     */
+    protected function fetchDeclaredParameters(string $stored_procedure): ?array
+    {
+        $parts = explode('.', $stored_procedure);
+        $routine = array_pop($parts);
+        $schema = array_pop($parts);
+
+        $statement = $this->pdo->prepare(
+            'SELECT p.PARAMETER_NAME FROM INFORMATION_SCHEMA.ROUTINES r'
+            . ' LEFT JOIN INFORMATION_SCHEMA.PARAMETERS p ON p.SPECIFIC_SCHEMA = r.ROUTINE_SCHEMA AND p.SPECIFIC_NAME = r.SPECIFIC_NAME AND p.ORDINAL_POSITION > 0'
+            . " WHERE r.ROUTINE_TYPE = 'PROCEDURE' AND r.ROUTINE_SCHEMA = COALESCE(?, DATABASE()) AND r.ROUTINE_NAME = ?"
+            . ' ORDER BY p.ORDINAL_POSITION'
+        );
+        $statement->execute([$schema, $routine]);
+        $names = $statement->fetchAll(PDO::FETCH_COLUMN);
+        $statement->closeCursor();
+
+        // No row: unknown procedure. A single NULL row: procedure without parameters.
+        return empty($names) ? null : array_values(array_filter($names, 'is_string'));
+    }
+
+    /**
+     * SIGNAL with the SQLSTATE '45000' ("unhandled user-defined exception"), reported with the error code 1644.
+     */
+    protected function isRaisedError(string $sql_state, ?int $code): bool
+    {
+        return $sql_state === '45000' || $code === 1644;
     }
 
     /**

@@ -147,3 +147,30 @@ BEGIN
     SELECT @p_value AS value;
 END;
 GO
+
+-- 10. Raise a business error with THROW
+IF OBJECT_ID('sp_raise_error', 'P') IS NOT NULL DROP PROCEDURE sp_raise_error;
+GO
+CREATE PROCEDURE sp_raise_error
+    @p_message NVARCHAR(2048)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    THROW 50001, @p_message, 1;
+END;
+GO
+
+-- 11. Parameters with default values (any of them can be omitted when matched by name)
+IF OBJECT_ID('sp_fetch_countries_page', 'P') IS NOT NULL DROP PROCEDURE sp_fetch_countries_page;
+GO
+CREATE PROCEDURE sp_fetch_countries_page
+    @p_letter VARCHAR(10) = '',
+    @p_limit  INT = 100,
+    @p_offset INT = 0
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT * FROM countries WHERE name LIKE @p_letter + '%' ORDER BY name
+    OFFSET @p_offset ROWS FETCH NEXT @p_limit ROWS ONLY;
+END;
+GO
