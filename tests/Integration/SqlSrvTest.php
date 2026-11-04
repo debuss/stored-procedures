@@ -1,6 +1,7 @@
 <?php
 
 use StoredProcedures\DbType;
+use StoredProcedures\Exception\ConnectionLostException;
 use StoredProcedures\Exception\ExecutionException;
 use StoredProcedures\Exception\NoResultsException;
 use StoredProcedures\Exception\ProcedureErrorException;
@@ -176,4 +177,51 @@ it('decodes a JSON column to an array', function () {
     expect($summary->total)->toBeGreaterThanOrEqual(10)
         ->and($summary->isos)->toHaveCount($summary->total)
         ->and($summary->isos)->toContain('FR', 'DE');
+});
+
+it('reports and remembers a connection lost during a transaction', function () {
+    // ODBC Driver 18 reconnects an idle connection by itself (connection resiliency), not within a transaction
+    $pdo = integrationPdo('sqlsrv');
+    $victim = new SqlConnection($pdo);
+    $victim->beginTransaction();
+    $id = (int) $pdo->query('SELECT @@SPID')->fetchColumn();
+    // KILL cannot run within a transaction
+    integrationPdo('sqlsrv')->exec(sprintf('KILL %d', $id));
+
+    expect(fn() => $victim->query('sp_count_countries'))->toThrow(ConnectionLostException::class)
+        ->and($victim->isConnectionLost())->toBeTrue()
+        ->and($victim->inTransaction())->toBeFalse()
+        ->and($victim->ping())->toBeFalse();
+
+    try {
+        unset($victim, $pdo);
+    } catch (PDOException) {
+        // Destroying the PDO instance rolls back its interrupted transaction, which fails
+    }
+});
+
+it('commits a transaction, or rolls it back when the callback throws', function () {
+    $connection = new SqlConnection(integrationPdo('sqlsrv'));
+    $count = fn(): int => (int) $connection->procedure('sp_count_countries')->scalar();
+    $before = $count();
+
+    expect(fn() => $connection->transaction(function (SqlConnection $connection) {
+        $connection->execute('sp_insert_country', ['p_iso' => 'QQ', 'p_name' => 'Nowhere']);
+        throw new RuntimeException('Abort');
+    }))->toThrow(RuntimeException::class, 'Abort')
+        ->and($count())->toBe($before)
+        ->and($connection->inTransaction())->toBeFalse();
+
+    $connection->transaction(fn(SqlConnection $connection) => $connection->execute('sp_insert_country', ['p_iso' => 'QQ', 'p_name' => 'Nowhere']));
+
+    try {
+        expect($count())->toBe($before + 1);
+    } finally {
+        $connection->execute('sp_delete_country', ['p_iso' => 'QQ']);
+    }
+});
+
+it('pings the server', function () {
+    expect($this->connection->ping())->toBeTrue()
+        ->and($this->connection->isConnectionLost())->toBeFalse();
 });

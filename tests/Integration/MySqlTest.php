@@ -1,6 +1,7 @@
 <?php
 
 use StoredProcedures\DbType;
+use StoredProcedures\Exception\ConnectionLostException;
 use StoredProcedures\Exception\ExecutionException;
 use StoredProcedures\Exception\NoResultsException;
 use StoredProcedures\Exception\ProcedureErrorException;
@@ -166,4 +167,41 @@ it('decodes a JSON column to an array', function () {
     expect($summary->total)->toBeGreaterThanOrEqual(10)
         ->and($summary->isos)->toHaveCount($summary->total)
         ->and($summary->isos)->toContain('FR', 'DE');
+});
+
+it('reports and remembers a lost connection', function () {
+    $victim = new SqlConnection(integrationPdo('mysql'));
+    $id = (int) $victim->getPdo()->query('SELECT CONNECTION_ID()')->fetchColumn();
+    $this->pdo->exec(sprintf('KILL %d', $id));
+
+    expect(fn() => $victim->query('sp_count_countries'))->toThrow(ConnectionLostException::class)
+        ->and($victim->isConnectionLost())->toBeTrue()
+        ->and($victim->inTransaction())->toBeFalse()
+        ->and($victim->ping())->toBeFalse();
+});
+
+it('commits a transaction, or rolls it back when the callback throws', function () {
+    $connection = new SqlConnection(integrationPdo('mysql'));
+    $count = fn(): int => (int) $connection->procedure('sp_count_countries')->scalar();
+    $before = $count();
+
+    expect(fn() => $connection->transaction(function (SqlConnection $connection) {
+        $connection->execute('sp_insert_country', ['p_iso' => 'QQ', 'p_name' => 'Nowhere']);
+        throw new RuntimeException('Abort');
+    }))->toThrow(RuntimeException::class, 'Abort')
+        ->and($count())->toBe($before)
+        ->and($connection->inTransaction())->toBeFalse();
+
+    $connection->transaction(fn(SqlConnection $connection) => $connection->execute('sp_insert_country', ['p_iso' => 'QQ', 'p_name' => 'Nowhere']));
+
+    try {
+        expect($count())->toBe($before + 1);
+    } finally {
+        $connection->execute('sp_delete_country', ['p_iso' => 'QQ']);
+    }
+});
+
+it('pings the server', function () {
+    expect($this->connection->ping())->toBeTrue()
+        ->and($this->connection->isConnectionLost())->toBeFalse();
 });

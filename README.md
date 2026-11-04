@@ -14,7 +14,9 @@ Built for teams where direct SQL queries are forbidden and all database access g
 - `OUT` and `INOUT` parameter support (driver-specific handling is abstracted away)
 - Immutable `ResultSet` with multi-row-set navigation, iteration, and counting
 - Named parameter validation to prevent SQL injection
-- Specific exception hierarchy for clean error handling, with the business errors raised by the procedures told apart
+- Specific exception hierarchy for clean error handling, with the business errors raised by the procedures and the lost connections told apart
+- Transactions: `transaction()` (commit, or rollback when the callback throws), `beginTransaction()`, `commit()`, `rollBack()`
+- Lost connection detection (`isConnectionLost()`, `ping()`) for long-running processes
 - Optional parameter matching by name on MySQL and SQL Server, like `SqlCommand` in .NET
 - [PSR-3](https://www.php-fig.org/psr/psr-3/) logging of the calls and failures
 - Requires only `ext-pdo` and `psr/log` — no ORM, no query builder, no framework dependency
@@ -246,6 +248,45 @@ $connection->execute('sp_insert_country', ['p_iso' => 'FI', 'p_nme' => 'Finland'
 - **MySQL**: procedures have no default values, so every declared parameter must be given.
 - A procedure not found in `INFORMATION_SCHEMA` (e.g. not visible to the user) keeps the given order: the database reports the error, if any.
 
+### Transactions
+
+```php
+$transfer = $connection->transaction(function (SqlConnection $connection): ResultSet {
+    $connection->execute('sp_debit', ['p_account' => 1, 'p_amount' => 500]);
+
+    return $connection->execute('sp_credit', ['p_account' => 2, 'p_amount' => 500]);
+}); // Committed when the callback returns, rolled back (and the exception rethrown) when it throws
+```
+
+- Called within a transaction already started, `transaction()` joins it: nothing is committed nor rolled back.
+- `beginTransaction()`, `commit()`, `rollBack()` and `inTransaction()` are also available. Their errors are converted to an `ExecutionException`, whose procedure name is the statement (`BEGIN TRANSACTION`, `COMMIT` or `ROLLBACK`).
+- `inTransaction()` is always `false` once the connection is lost: the server rolled the transaction back, even when PDO still reports it as active (PostgreSQL, SQL Server).
+
+### Lost Connections
+
+In a long-running process (FrankenPHP or RoadRunner worker, queue consumer…), a connection can be closed between two jobs: idle timeout of the server (`wait_timeout`), firewall, restart, failover…
+
+A call on a lost connection throws a `ConnectionLostException`, and the connection remembers it, even when the exception is caught:
+
+```php
+if ($connection->isConnectionLost()) {
+    $connection = new SqlConnection(new PDO(/* ... */)); // Replace the connection, and its PDO instance
+}
+
+$connection->ping(); // false when the connection is not usable (a trivial SELECT 1), which marks it as lost
+```
+
+The state is shared with the copies of the connection (`withTimeout()`).
+
+| Database | Lost connection recognized by |
+|----------|-------------------------------|
+| **MySQL** | error code 2006 (server has gone away), 2013 (lost during the query) or 4031 (disconnected for inactivity), SQLSTATE class `08` |
+| **PostgreSQL** | SQLSTATE `57P01`, `57P02`, `57P03`, class `08`, or the generic `HY000` with a bad connection status |
+| **SQL Server** | SQLSTATE class `08` (e.g. `08S01` communication link failure) |
+
+> [!NOTE]
+> **SQL Server**: the ODBC Driver 18 reconnects an idle connection by itself (*connection resiliency*, see `ConnectRetryCount`), but not within a transaction. Destroying a PDO instance whose transaction was interrupted throws a `PDOException` (PDO tries to roll it back): discard such a connection within a `try` block.
+
 ### Fluent Procedure Builder
 
 For a more readable syntax, use the fluent builder:
@@ -395,6 +436,7 @@ All exceptions extend `StoredProcedureException` for easy catch-all handling:
 | `ExecutionException` | The database reports an error during the call |
 | `ProcedureErrorException` | The procedure raises an error on purpose (subclass of `ExecutionException`) |
 | `TimeoutException` | The call takes longer than the timeout (subclass of `ExecutionException`) |
+| `ConnectionLostException` | The connection to the server was lost: it must be replaced (subclass of `ExecutionException`) |
 | `NoResultsException` | `queryFirst()` or `querySingle()` returns zero rows |
 | `MultipleResultsException` | `querySingle()` returns more than one row |
 | `MappingException` | A row cannot be mapped to the requested class |

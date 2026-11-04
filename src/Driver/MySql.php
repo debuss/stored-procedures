@@ -134,6 +134,15 @@ class MySql extends AbstractDriver
     }
 
     /**
+     * MySQL reports a lost connection with the generic SQLSTATE HY000 and the error code 2006 (server has gone away),
+     * 2013 (lost connection during query) or 4031 (disconnected by the server for inactivity, MySQL 8.0.24+).
+     */
+    protected function isConnectionLost(string $sql_state, ?int $code): bool
+    {
+        return parent::isConnectionLost($sql_state, $code) || in_array($code, [2006, 2013, 4031], true);
+    }
+
+    /**
      * Initialize a MySQL user variable with the INOUT parameter's initial value.
      */
     private function initUserVariable(SqlParameter $parameter): void

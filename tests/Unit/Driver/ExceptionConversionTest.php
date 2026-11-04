@@ -4,6 +4,7 @@ use StoredProcedures\Driver\AbstractDriver;
 use StoredProcedures\Driver\MySql;
 use StoredProcedures\Driver\PgSql;
 use StoredProcedures\Driver\SqlSrv;
+use StoredProcedures\Exception\ConnectionLostException;
 use StoredProcedures\Exception\ExecutionException;
 use StoredProcedures\Exception\ProcedureErrorException;
 
@@ -64,4 +65,37 @@ it('falls back to the exception message without error info', function () {
 
     expect($exception->getMessage())->toBe('Connection lost')
         ->and($exception->getDriverCode())->toBeNull();
+});
+
+it('converts the errors of a lost connection to ConnectionLostException', function (string $driver, array $error_info) {
+    $exception = (new $driver(Mockery::mock(PDO::class)))->convertException('sp_test', pdoError($error_info));
+
+    expect($exception)->toBeInstanceOf(ConnectionLostException::class)
+        ->and($exception->getSqlState())->toBe($error_info[0]);
+})->with([
+    'MySQL, server has gone away' => [MySql::class, ['HY000', 2006, 'MySQL server has gone away']],
+    'MySQL, lost during the query' => [MySql::class, ['HY000', 2013, 'Lost connection to MySQL server during query']],
+    'MySQL, disconnected for inactivity' => [MySql::class, ['HY000', 4031, 'The client was disconnected by the server because of inactivity.']],
+    'MySQL, SQLSTATE class 08' => [MySql::class, ['08S01', 1047, 'Unknown command']],
+    'SQL Server, communication link failure' => [SqlSrv::class, ['08S01', 10054, '[Microsoft][ODBC Driver 18 for SQL Server]TCP Provider: Error code 0x2746']],
+    'SQL Server, physical connection not usable' => [SqlSrv::class, ['08S02', -1, '[Microsoft][ODBC Driver 18 for SQL Server]SMux Provider: Physical connection is not usable [xFFFFFFFF].']],
+    'PostgreSQL, server shutdown' => [PgSql::class, ['57P01', 7, 'FATAL:  terminating connection due to administrator command']],
+]);
+
+it('tells a lost PostgreSQL connection by its status', function (string $status, string $class) {
+    $pdo = Mockery::mock(PDO::class);
+    $pdo->shouldReceive('getAttribute')->with(PDO::ATTR_CONNECTION_STATUS)->andReturn($status);
+
+    $exception = (new PgSql($pdo))->convertException('fn_test', pdoError(['HY000', 7, 'no connection to the server']));
+
+    expect($exception::class)->toBe($class);
+})->with([
+    'bad connection' => ['Bad connection.', ConnectionLostException::class],
+    'connection OK' => ['Connection OK; waiting to send.', ExecutionException::class],
+]);
+
+it('does not mistake the other errors with a generic SQLSTATE for a lost connection', function () {
+    $exception = (new MySql(Mockery::mock(PDO::class)))->convertException('sp_test', pdoError(['HY000', 1205, 'Lock wait timeout exceeded']));
+
+    expect($exception)->not->toBeInstanceOf(ConnectionLostException::class);
 });

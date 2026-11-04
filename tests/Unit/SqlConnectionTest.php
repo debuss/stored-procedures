@@ -3,6 +3,8 @@
 use StoredProcedures\DbType;
 use StoredProcedures\Driver\Call;
 use StoredProcedures\Driver\DriverInterface;
+use StoredProcedures\Exception\ConnectionLostException;
+use StoredProcedures\Exception\ExecutionException;
 use StoredProcedures\Exception\MultipleResultsException;
 use StoredProcedures\Exception\NoResultsException;
 use StoredProcedures\Exception\StoredProcedureException;
@@ -542,5 +544,126 @@ describe('logging', function () {
         $connection = new SqlConnection($pdo, $this->logger);
 
         expect((new ReflectionProperty($connection, 'logger'))->getValue($connection))->toBe($this->logger);
+    });
+});
+
+// ---------------------------------------------------------------
+//  Lost connections
+// ---------------------------------------------------------------
+
+describe('lost connections', function () {
+    beforeEach(function () {
+        [$this->connection, $this->pdo, $this->driver] = setupMocks();
+        $this->lost = new ConnectionLostException('MySQL server has gone away', 'sp_test', 'HY000', 2006);
+    });
+
+    it('is not lost at first', function () {
+        expect($this->connection->isConnectionLost())->toBeFalse();
+    });
+
+    it('remembers a lost connection, even when the exception is caught', function () {
+        $this->driver->shouldReceive('prepare')->andThrow(new PDOException('gone away'));
+        $this->driver->shouldReceive('convertException')->andReturn($this->lost);
+
+        expect(fn() => $this->connection->query('sp_test'))->toThrow(ConnectionLostException::class)
+            ->and($this->connection->isConnectionLost())->toBeTrue();
+    });
+
+    it('is not lost after another error', function () {
+        $this->driver->shouldReceive('prepare')->andThrow(new PDOException('syntax'));
+        $this->driver->shouldReceive('convertException')->andReturn(new ExecutionException('Syntax error', 'sp_test', '42000', 1064));
+
+        expect(fn() => $this->connection->query('sp_test'))->toThrow(ExecutionException::class)
+            ->and($this->connection->isConnectionLost())->toBeFalse();
+    });
+
+    it('shares the state with the copies of the connection', function () {
+        $copy = $this->connection->withTimeout(5);
+        $this->driver->shouldReceive('prepare')->andThrow(new PDOException('gone away'));
+        $this->driver->shouldReceive('convertException')->andReturn($this->lost);
+
+        expect(fn() => $copy->query('sp_test'))->toThrow(ConnectionLostException::class)
+            ->and($this->connection->isConnectionLost())->toBeTrue();
+    });
+
+    it('pings the server', function () {
+        $this->pdo->shouldReceive('query')->once()->with('SELECT 1')->andReturn(Mockery::mock(PDOStatement::class));
+
+        expect($this->connection->ping())->toBeTrue()
+            ->and($this->connection->isConnectionLost())->toBeFalse();
+    });
+
+    it('marks the connection as lost when the ping fails', function () {
+        $this->pdo->shouldReceive('query')->once()->with('SELECT 1')->andThrow(new PDOException('gone away'));
+
+        expect($this->connection->ping())->toBeFalse()
+            ->and($this->connection->isConnectionLost())->toBeTrue()
+            ->and($this->connection->ping())->toBeFalse();
+    });
+
+    it('has no transaction once lost', function () {
+        $this->pdo->shouldReceive('query')->andThrow(new PDOException('gone away'));
+        $this->pdo->shouldReceive('inTransaction')->andReturn(true);
+        $this->connection->ping();
+
+        expect($this->connection->inTransaction())->toBeFalse();
+    });
+});
+
+// ---------------------------------------------------------------
+//  Transactions
+// ---------------------------------------------------------------
+
+describe('transactions', function () {
+    beforeEach(function () {
+        [$this->connection, $this->pdo, $this->driver] = setupMocks();
+    });
+
+    it('commits when the callback returns, and returns its result', function () {
+        $this->pdo->shouldReceive('inTransaction')->andReturn(false);
+        $this->pdo->shouldReceive('beginTransaction')->once()->andReturn(true);
+        $this->pdo->shouldReceive('commit')->once()->andReturn(true);
+        $this->pdo->shouldNotReceive('rollBack');
+
+        expect($this->connection->transaction(fn(SqlConnection $connection): string => 'done'))->toBe('done');
+    });
+
+    it('rolls back when the callback throws, and rethrows', function () {
+        $this->pdo->shouldReceive('inTransaction')->andReturn(false, true);
+        $this->pdo->shouldReceive('beginTransaction')->once()->andReturn(true);
+        $this->pdo->shouldReceive('rollBack')->once()->andReturn(true);
+        $this->pdo->shouldNotReceive('commit');
+
+        expect(fn() => $this->connection->transaction(fn() => throw new RuntimeException('Insufficient balance')))
+            ->toThrow(RuntimeException::class, 'Insufficient balance');
+    });
+
+    it('reports the error of the callback when the rollback fails', function () {
+        $this->pdo->shouldReceive('inTransaction')->andReturn(false, true);
+        $this->pdo->shouldReceive('beginTransaction')->andReturn(true);
+        $this->pdo->shouldReceive('rollBack')->andThrow(new PDOException('gone away'));
+        $this->driver->shouldReceive('convertException')->andReturn(new ExecutionException('gone away', 'ROLLBACK', 'HY000'));
+
+        expect(fn() => $this->connection->transaction(fn() => throw new RuntimeException('Insufficient balance')))
+            ->toThrow(RuntimeException::class, 'Insufficient balance');
+    });
+
+    it('joins the transaction already started', function () {
+        $this->pdo->shouldReceive('inTransaction')->andReturn(true);
+        $this->pdo->shouldNotReceive('beginTransaction');
+        $this->pdo->shouldNotReceive('commit');
+
+        expect($this->connection->transaction(fn(): int => 42))->toBe(42);
+    });
+
+    it('converts the errors of the transaction statements, marking a lost connection', function () {
+        $this->pdo->shouldReceive('inTransaction')->andReturn(false);
+        $this->pdo->shouldReceive('beginTransaction')->andReturn(true);
+        $this->pdo->shouldReceive('commit')->andThrow($error = new PDOException('gone away'));
+        $this->driver->shouldReceive('convertException')->with('COMMIT', $error)
+            ->andReturn(new ConnectionLostException('MySQL server has gone away', 'COMMIT', 'HY000', 2006));
+
+        expect(fn() => $this->connection->transaction(fn() => null))->toThrow(ConnectionLostException::class)
+            ->and($this->connection->isConnectionLost())->toBeTrue();
     });
 });

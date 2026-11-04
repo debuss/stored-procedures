@@ -10,8 +10,9 @@ use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\LogLevel;
 use stdClass;
+use Throwable;
 use StoredProcedures\Driver\{Call, DriverInterface, MySql, PgSql, SqlSrv};
-use StoredProcedures\Exception\{ExecutionException, MultipleResultsException, NoResultsException, ProcedureErrorException, StoredProcedureException, UnsupportedDriverException};
+use StoredProcedures\Exception\{ConnectionLostException, ExecutionException, MultipleResultsException, NoResultsException, ProcedureErrorException, StoredProcedureException, UnsupportedDriverException};
 
 class SqlConnection implements LoggerAwareInterface
 {
@@ -22,6 +23,11 @@ class SqlConnection implements LoggerAwareInterface
      * The maximum duration of the calls in seconds, or null for none.
      */
     protected ?int $timeout = null;
+
+    /**
+     * Shared with the copies of the connection, which use the same PDO instance.
+     */
+    protected ConnectionState $state;
 
     /**
      * @param PDO $pdo
@@ -42,6 +48,8 @@ class SqlConnection implements LoggerAwareInterface
         if ($this->pdo->getAttribute(PDO::ATTR_ERRMODE) !== PDO::ERRMODE_EXCEPTION) {
             throw new StoredProcedureException('The PDO instance must use the PDO::ERRMODE_EXCEPTION error mode.');
         }
+
+        $this->state = new ConnectionState();
 
         $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
 
@@ -95,6 +103,112 @@ class SqlConnection implements LoggerAwareInterface
     public function getTimeout(): ?int
     {
         return $this->timeout;
+    }
+
+    /**
+     * Tell whether a call failed because the connection to the server was lost (see {@see ConnectionLostException}).
+     *
+     * The connection, and its PDO instance, must then be replaced: useful in long-running processes
+     * (workers, consumers) keeping their connections between two jobs, whether the exception was caught or not.
+     */
+    public function isConnectionLost(): bool
+    {
+        return $this->state->lost;
+    }
+
+    /**
+     * Check that the connection to the server is usable, with a trivial query.
+     *
+     * A failure marks the connection as lost.
+     */
+    public function ping(): bool
+    {
+        if ($this->state->lost) {
+            return false;
+        }
+
+        try {
+            $this->pdo->query('SELECT 1');
+
+            return true;
+        } catch (PDOException) {
+            $this->state->lost = true;
+
+            return false;
+        }
+    }
+
+    /**
+     * Run the callback in a transaction: committed when the callback returns, rolled back when it throws.
+     *
+     * Within a transaction already started, the callback joins it: nothing is committed nor rolled back.
+     *
+     * @template T
+     * @param Closure(static): T $callback
+     * @return T
+     * @throws ExecutionException When the transaction cannot be started or committed
+     */
+    public function transaction(Closure $callback): mixed
+    {
+        if ($this->inTransaction()) {
+            return $callback($this);
+        }
+
+        $this->beginTransaction();
+
+        try {
+            $result = $callback($this);
+        } catch (Throwable $e) {
+            // A lost connection has no transaction left to roll back
+            if ($this->inTransaction()) {
+                try {
+                    $this->rollBack();
+                } catch (ExecutionException) {
+                    // The error of the callback is the one to report
+                }
+            }
+
+            throw $e;
+        }
+
+        $this->commit();
+
+        return $result;
+    }
+
+    /**
+     * @throws ExecutionException With the statement as procedure name, e.g. a ConnectionLostException
+     */
+    public function beginTransaction(): void
+    {
+        $this->runTransactionStatement('BEGIN TRANSACTION', fn(): bool => $this->pdo->beginTransaction());
+    }
+
+    /**
+     * @throws ExecutionException With the statement as procedure name, e.g. a ConnectionLostException
+     */
+    public function commit(): void
+    {
+        $this->runTransactionStatement('COMMIT', fn(): bool => $this->pdo->commit());
+    }
+
+    /**
+     * @throws ExecutionException With the statement as procedure name, e.g. a ConnectionLostException
+     */
+    public function rollBack(): void
+    {
+        $this->runTransactionStatement('ROLLBACK', fn(): bool => $this->pdo->rollBack());
+    }
+
+    /**
+     * Tell whether a transaction is in progress.
+     *
+     * Always false once the connection is lost: the server rolled the transaction back
+     * (PDO may still report it as active).
+     */
+    public function inTransaction(): bool
+    {
+        return !$this->state->lost && $this->pdo->inTransaction();
     }
 
     public function procedure(string $stored_procedure): Procedure
@@ -295,7 +409,7 @@ class SqlConnection implements LoggerAwareInterface
         try {
             $result = $operation($this->driver->prepare($stored_procedure, $parameters, $this->timeout));
         } catch (PDOException $e) {
-            throw $this->logFailure($this->driver->convertException($stored_procedure, $e), $context, $start);
+            throw $this->logFailure($this->convertException($stored_procedure, $e), $context, $start);
         } catch (StoredProcedureException $e) {
             throw $this->logFailure($e, $context, $start);
         }
@@ -324,6 +438,33 @@ class SqlConnection implements LoggerAwareInterface
             return $fetch($call->statement);
         } finally {
             $call->statement->closeCursor();
+        }
+    }
+
+    /**
+     * Convert an error reported by the database, marking the connection as lost when it is.
+     */
+    private function convertException(string $statement, PDOException $exception): ExecutionException
+    {
+        $converted = $this->driver->convertException($statement, $exception);
+
+        if ($converted instanceof ConnectionLostException) {
+            $this->state->lost = true;
+        }
+
+        return $converted;
+    }
+
+    /**
+     * @param Closure(): bool $operation
+     * @throws ExecutionException
+     */
+    private function runTransactionStatement(string $statement, Closure $operation): void
+    {
+        try {
+            $operation();
+        } catch (PDOException $e) {
+            throw $this->convertException($statement, $e);
         }
     }
 
