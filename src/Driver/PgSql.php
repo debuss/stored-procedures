@@ -196,6 +196,18 @@ class PgSql extends AbstractDriver
     }
 
     /**
+     * The server reports its shutdown with the SQLSTATE 57P01 (admin_shutdown), 57P02 (crash_shutdown)
+     * or 57P03 (cannot_connect_now). A connection closed by the server or the network is reported by libpq
+     * with the generic SQLSTATE HY000: the connection status tells it apart, without a round trip.
+     */
+    protected function isConnectionLost(string $sql_state, ?int $code): bool
+    {
+        return parent::isConnectionLost($sql_state, $code)
+            || in_array($sql_state, ['57P01', '57P02', '57P03'], true)
+            || ($sql_state === 'HY000' && $this->pdo->getAttribute(PDO::ATTR_CONNECTION_STATUS) === 'Bad connection.');
+    }
+
+    /**
      * PDO reports the same libpq status (7, PGRES_FATAL_ERROR) for every error: use the SQLSTATE instead.
      */
     protected function driverCode(int $code): ?int

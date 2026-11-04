@@ -5,6 +5,7 @@ namespace StoredProcedures\Driver;
 use PDO;
 use PDOException;
 use PDOStatement;
+use StoredProcedures\Exception\ConnectionLostException;
 use StoredProcedures\Exception\ExecutionException;
 use StoredProcedures\Exception\ProcedureErrorException;
 use StoredProcedures\Exception\StoredProcedureException;
@@ -165,6 +166,7 @@ abstract class AbstractDriver implements DriverInterface
         $class = match (true) {
             $this->isTimeout($sql_state, $code) => TimeoutException::class,
             $this->isRaisedError($sql_state, $code) => ProcedureErrorException::class,
+            $this->isConnectionLost($sql_state, $code) => ConnectionLostException::class,
             default => ExecutionException::class,
         };
 
@@ -177,6 +179,16 @@ abstract class AbstractDriver implements DriverInterface
     protected function isTimeout(string $sql_state, ?int $code): bool
     {
         return false;
+    }
+
+    /**
+     * Tell whether the connection to the server was lost.
+     *
+     * By default, the errors of the SQLSTATE class 08 (connection exception), e.g. 08S01 (communication link failure).
+     */
+    protected function isConnectionLost(string $sql_state, ?int $code): bool
+    {
+        return str_starts_with($sql_state, '08');
     }
 
     /**

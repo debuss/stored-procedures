@@ -39,7 +39,8 @@ interface DriverInterface
      * @param string $stored_procedure
      * @param PDOException $exception
      * @return ExecutionException A TimeoutException when the call took longer than the timeout,
-     *                             a ProcedureErrorException when the procedure raised the error on purpose
+     *                             a ProcedureErrorException when the procedure raised the error on purpose,
+     *                             a ConnectionLostException when the connection to the server was lost
      */
     public function convertException(string $stored_procedure, PDOException $exception): ExecutionException;
 

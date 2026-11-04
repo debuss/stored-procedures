@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- `ConnectionLostException` (a subclass of `ExecutionException`) for the errors of a lost connection: SQLSTATE class `08`, MySQL error codes 2006, 2013 and 4031, PostgreSQL SQLSTATE `57P01` to `57P03` and libpq errors on a bad connection.
+- `SqlConnection::isConnectionLost()`, remembering that a call lost the connection even when the exception was caught (shared with the copies of the connection), and `SqlConnection::ping()`.
+- Transactions: `SqlConnection::transaction()` (commit, or rollback when the callback throws; joins a transaction already started), `beginTransaction()`, `commit()`, `rollBack()` and `inTransaction()` (always `false` once the connection is lost).
+
 ## [0.3.0] - 2026-10-30
 
 ### Breaking changes
