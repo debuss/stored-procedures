@@ -6,6 +6,7 @@ use StoredProcedures\Exception\ExecutionException;
 use StoredProcedures\Exception\NoResultsException;
 use StoredProcedures\Exception\ProcedureErrorException;
 use StoredProcedures\Exception\StoredProcedureException;
+use StoredProcedures\Invocation;
 use StoredProcedures\SqlConnection;
 use Tests\Fixtures\Country;
 use Tests\Fixtures\Iso;
@@ -204,4 +205,20 @@ it('commits a transaction, or rolls it back when the callback throws', function 
 it('pings the server', function () {
     expect($this->connection->ping())->toBeTrue()
         ->and($this->connection->isConnectionLost())->toBeFalse();
+});
+
+it('intercepts the calls, failed ones included', function () {
+    $seen = [];
+    $this->connection->addInterceptor(function (Invocation $invocation, Closure $proceed) use (&$seen): mixed {
+        try {
+            return $proceed();
+        } catch (ProcedureErrorException $e) {
+            $seen[] = $invocation->procedure . ': ' . $e->getMessage();
+
+            throw $e;
+        }
+    });
+
+    expect(fn() => $this->connection->execute('sp_raise_error', ['p_message' => 'Country ZZ not found']))->toThrow(ProcedureErrorException::class)
+        ->and($seen)->toBe(['sp_raise_error: Country ZZ not found']);
 });

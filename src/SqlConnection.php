@@ -30,6 +30,18 @@ class SqlConnection implements LoggerAwareInterface
     protected ConnectionState $state;
 
     /**
+     * The PDO driver name: mysql, pgsql, sqlsrv or dblib.
+     */
+    protected string $driver_name;
+
+    /**
+     * Wrapping every call, the first added being the outermost.
+     *
+     * @var list<Closure(Invocation, Closure(): mixed): mixed>
+     */
+    protected array $interceptors = [];
+
+    /**
      * @param PDO $pdo
      * @param LoggerInterface|null $logger Logs each call (debug) and each failure (warning for the errors raised by
      *                                     the procedure, error otherwise), with the parameter names but not their values
@@ -52,6 +64,7 @@ class SqlConnection implements LoggerAwareInterface
         $this->state = new ConnectionState();
 
         $driver = $this->pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
+        $this->driver_name = is_string($driver) ? $driver : '';
 
         $this->driver = match ($driver) {
             'mysql' => new MySql($this->pdo, $match_parameters_by_name),
@@ -69,6 +82,32 @@ class SqlConnection implements LoggerAwareInterface
     public function getPdo(): PDO
     {
         return $this->pdo;
+    }
+
+    /**
+     * Wrap every call to a stored procedure, e.g. to trace it (an OpenTelemetry span) or to measure it.
+     *
+     * The interceptor receives the call and a closure running it, and must return the result of that closure:
+     *
+     *     $connection->addInterceptor(function (Invocation $invocation, Closure $proceed): mixed {
+     *         $start = hrtime(true);
+     *
+     *         try {
+     *             return $proceed(); // Throws the StoredProcedureException of a failed call
+     *         } finally {
+     *             $metrics->record($invocation->procedure, hrtime(true) - $start);
+     *         }
+     *     });
+     *
+     * Interceptors run in the order they were added, the first one being the outermost. The copies of the
+     * connection (see {@see withTimeout()}) keep the interceptors added before they were made. The transaction
+     * statements (see {@see transaction()}) are not intercepted.
+     *
+     * @param Closure(Invocation, Closure(): mixed): mixed $interceptor
+     */
+    public function addInterceptor(Closure $interceptor): void
+    {
+        $this->interceptors[] = $interceptor;
     }
 
     public function setLogger(LoggerInterface $logger): void
@@ -406,10 +445,27 @@ class SqlConnection implements LoggerAwareInterface
         ] + ($this->timeout === null ? [] : ['timeout' => $this->timeout]);
         $start = hrtime(true);
 
+        $proceed = function () use ($stored_procedure, $parameters, $operation): mixed {
+            try {
+                return $operation($this->driver->prepare($stored_procedure, $parameters, $this->timeout));
+            } catch (PDOException $e) {
+                throw $this->convertException($stored_procedure, $e);
+            }
+        };
+
+        if ($this->interceptors !== []) {
+            $invocation = new Invocation($stored_procedure, array_values($context['parameters']), $this->driver_name, $this->timeout);
+
+            // Wrapped from the innermost to the outermost interceptor
+            foreach (array_reverse($this->interceptors) as $interceptor) {
+                $next = $proceed;
+                $proceed = fn(): mixed => $interceptor($invocation, $next);
+            }
+        }
+
         try {
-            $result = $operation($this->driver->prepare($stored_procedure, $parameters, $this->timeout));
-        } catch (PDOException $e) {
-            throw $this->logFailure($this->convertException($stored_procedure, $e), $context, $start);
+            /** @var T $result The interceptors return the result of the call */
+            $result = $proceed();
         } catch (StoredProcedureException $e) {
             throw $this->logFailure($e, $context, $start);
         }

@@ -17,6 +17,7 @@ Built for teams where direct SQL queries are forbidden and all database access g
 - Specific exception hierarchy for clean error handling, with the business errors raised by the procedures and the lost connections told apart
 - Transactions: `transaction()` (commit, or rollback when the callback throws), `beginTransaction()`, `commit()`, `rollBack()`
 - Lost connection detection (`isConnectionLost()`, `ping()`) for long-running processes
+- Interceptors wrapping every call, e.g. for tracing (OpenTelemetry) or metrics
 - Optional parameter matching by name on MySQL and SQL Server, like `SqlCommand` in .NET
 - [PSR-3](https://www.php-fig.org/psr/psr-3/) logging of the calls and failures
 - Requires only `ext-pdo` and `psr/log` — no ORM, no query builder, no framework dependency
@@ -409,6 +410,35 @@ try {
 ```
 
 `getDriverCode()` returns `null` with PostgreSQL, which has no error codes besides the SQLSTATE.
+
+## Interceptors
+
+An interceptor wraps every call to a stored procedure: it receives an `Invocation` (procedure name, parameter names, PDO driver name and timeout, never the parameter values) and a closure running the call, whose result it must return.
+
+```php
+use StoredProcedures\Invocation;
+
+$connection->addInterceptor(function (Invocation $invocation, Closure $proceed) use ($tracer): mixed {
+    $span = $tracer->spanBuilder("CALL {$invocation->procedure}")->startSpan();
+    $scope = $span->activate();
+
+    try {
+        return $proceed();
+    } catch (ExecutionException $e) {
+        $span->setAttribute('db.response.status_code', $e->getSqlState());
+
+        throw $e;
+    } finally {
+        $scope->detach();
+        $span->end();
+    }
+});
+```
+
+- The closure throws the `StoredProcedureException` of a failed call, already converted (`ProcedureErrorException`, `ConnectionLostException`…).
+- Interceptors run in the order they were added, the first one being the outermost.
+- The copies of the connection (`withTimeout()`) keep the interceptors added before they were made.
+- The transaction statements (`transaction()`, `commit()`…) are not intercepted.
 
 ## Logging
 

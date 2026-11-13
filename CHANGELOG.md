@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Interceptors: `SqlConnection::addInterceptor()` wraps every call to a stored procedure, with an `Invocation` (procedure name, parameter names, PDO driver name and timeout, without the parameter values) and a closure running the call, e.g. to trace it with OpenTelemetry or to measure it.
+
 ## [0.4.0] - 2026-11-04
 
 ### Added

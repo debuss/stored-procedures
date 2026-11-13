@@ -9,6 +9,7 @@ use StoredProcedures\Exception\MultipleResultsException;
 use StoredProcedures\Exception\NoResultsException;
 use StoredProcedures\Exception\StoredProcedureException;
 use StoredProcedures\Exception\UnsupportedDriverException;
+use StoredProcedures\Invocation;
 use StoredProcedures\ParameterMode;
 use StoredProcedures\ResultSet;
 use StoredProcedures\SqlConnection;
@@ -665,5 +666,89 @@ describe('transactions', function () {
 
         expect(fn() => $this->connection->transaction(fn() => null))->toThrow(ConnectionLostException::class)
             ->and($this->connection->isConnectionLost())->toBeTrue();
+    });
+});
+
+// ---------------------------------------------------------------
+//  Interceptors
+// ---------------------------------------------------------------
+
+describe('interceptors', function () {
+    beforeEach(function () {
+        [$this->connection, $this->pdo, $this->driver, $this->statement] = setupMocks();
+        $this->statement->shouldReceive('execute')->andReturn(true)->byDefault();
+        $this->statement->shouldReceive('closeCursor')->andReturn(true)->byDefault();
+        $this->driver->shouldReceive('fetchRowSets')->andReturn([[['total' => 42]]])->byDefault();
+    });
+
+    it('wraps the calls, receiving the invocation and returning the result', function () {
+        $seen = [];
+        $this->connection->addInterceptor(function (Invocation $invocation, Closure $proceed) use (&$seen): mixed {
+            $seen[] = $invocation;
+
+            return $proceed();
+        });
+
+        $this->statement->shouldReceive('fetch')->with(PDO::FETCH_NUM)->andReturn([42]);
+
+        $total = $this->connection->queryScalar('sp_count', ['p_letter' => 'F', 'p_active' => true]);
+
+        expect($total)->toBe(42)
+            ->and($seen)->toHaveCount(1)
+            ->and($seen[0]->procedure)->toBe('sp_count')
+            ->and($seen[0]->parameters)->toBe(['p_letter', 'p_active'])
+            ->and($seen[0]->driver)->toBe('mysql')
+            ->and($seen[0]->timeout)->toBeNull();
+    });
+
+    it('runs the interceptors in their order, the first added being the outermost', function () {
+        $trace = [];
+        foreach (['first', 'second'] as $name) {
+            $this->connection->addInterceptor(function (Invocation $invocation, Closure $proceed) use (&$trace, $name): mixed {
+                $trace[] = "$name before";
+                $result = $proceed();
+                $trace[] = "$name after";
+
+                return $result;
+            });
+        }
+
+        $this->connection->query('sp_test');
+
+        expect($trace)->toBe(['first before', 'second before', 'second after', 'first after']);
+    });
+
+    it('lets the interceptors see the converted exception of a failed call', function () {
+        $error = new ExecutionException('Table missing', 'sp_test', '42S02', 1146);
+        $this->driver->shouldReceive('prepare')->andThrow(new PDOException('Table missing'));
+        $this->driver->shouldReceive('convertException')->andReturn($error);
+
+        $seen = null;
+        $this->connection->addInterceptor(function (Invocation $invocation, Closure $proceed) use (&$seen): mixed {
+            try {
+                return $proceed();
+            } catch (ExecutionException $e) {
+                $seen = $e;
+
+                throw $e;
+            }
+        });
+
+        expect(fn() => $this->connection->query('sp_test'))->toThrow($error)
+            ->and($seen)->toBe($error);
+    });
+
+    it('is kept by the copies of the connection', function () {
+        $timeouts = [];
+        $this->connection->addInterceptor(function (Invocation $invocation, Closure $proceed) use (&$timeouts): mixed {
+            $timeouts[] = $invocation->timeout;
+
+            return $proceed();
+        });
+        $this->driver->shouldReceive('prepare')->andReturn(new Call($this->statement, fn(): array => []));
+
+        $this->connection->withTimeout(5)->query('sp_test');
+
+        expect($timeouts)->toBe([5]);
     });
 });
